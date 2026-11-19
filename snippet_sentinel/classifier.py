@@ -93,6 +93,7 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
     if re.search(r'\b(?:HTTP(?: status)?|status(?: code)?|client error)\s*:?\s*[\'\"]?40[13]\b|\b40[13]\s+(?:Unauthorized|Forbidden)\b'
                  r'|\b(?:Missing|No|Invalid|Expired) (?:\w+ )?(?:credentials?|API[ _-]?key|access token)\b'
                  r'|\b(?:AuthenticationError|UnauthorizedError)\b|failed to read (?:the token file|[\w ]*\btoken from)\b'
+                 r'|\bCould not find credentials\b|\bcredentials? requires\b|\bauthentication failed\b'
                  r'|(?:KeyError:\s*[\'\"]|\b(?:os\.environ|process\.env)\.)[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
                  r'|missing (?:environment|env) (?:variable|var)\s+[\x60\'\"]?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
                  r'|[\x60\'\"][A-Z][A-Z0-9_]+[\x60\'\"] environment variable\b', summary, re.I) or missing_env(summary, code):
