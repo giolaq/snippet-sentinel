@@ -6,6 +6,7 @@ import re
 import selectors
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tarfile
@@ -269,13 +270,28 @@ _stopping = threading.Event()
 
 
 def owner_identity():
-    return f'{os.getpid()}:{Path("/proc/self/stat").read_text().rsplit(")", 1)[1].split()[19]}'
+    try:
+        started = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
+        return f'{os.getpid()}:{started}'
+    except (OSError, IndexError):
+        return f'{os.getpid()}:unknown-{socket.gethostname()}'
+
+
+def owner_namespace():
+    try:
+        return os.readlink('/proc/self/ns/pid')
+    except OSError:
+        return ''
 
 
 def owner_container():
-    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+    try:
+        mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+    except OSError:
+        return ''
+    for line in mounts:
         fields = line.split()
-        if fields[4] == '/etc/hostname':
+        if len(fields) > 4 and fields[4] == '/etc/hostname':
             match = re.search(r'/containers/([a-f0-9]{64})/hostname$', fields[3])
             if match:
                 return match[1]
@@ -283,7 +299,14 @@ def owner_container():
 
 
 def cleanup_stale():
-    namespace = os.readlink('/proc/self/ns/pid')
+    try:
+        _cleanup_stale()
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
+        pass
+
+
+def _cleanup_stale():
+    namespace = owner_namespace()
     listing = subprocess.run(['docker', 'ps', '-aq', '--filter', f'label={SANDBOX_LABEL}=true'],
                              capture_output=True, text=True, timeout=10)
     for name in listing.stdout.split():
@@ -292,7 +315,7 @@ def cleanup_stale():
         if info.returncode:
             continue
         labels = json.loads(info.stdout)
-        if labels.get('snippet-sentinel.namespace') == namespace:
+        if namespace and labels.get('snippet-sentinel.namespace') == namespace:
             try:
                 pid, started = labels.get('snippet-sentinel.owner', '').split(':')
                 live = Path(f'/proc/{int(pid)}/stat').read_text().rsplit(')', 1)[1].split()[19] == started
@@ -467,7 +490,7 @@ process.exit(r.status === null ? 1 : r.status);
                 out, rc, expired = command(['docker', 'create', '--name', name, '--memory', '512m', '--cpus', '1',
                     '--pids-limit', '256', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                     '--label', f'{SANDBOX_LABEL}=true', '--label', f'snippet-sentinel.owner={owner_identity()}',
-                    '--label', f'snippet-sentinel.namespace={os.readlink("/proc/self/ns/pid")}',
+                    '--label', f'snippet-sentinel.namespace={owner_namespace()}',
                     '--label', f'snippet-sentinel.owner-container={owner_container()}',
                     '--read-only', '--tmpfs', '/work:rw,exec,nosuid,size=128m',
                     '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '--log-driver', 'none',
