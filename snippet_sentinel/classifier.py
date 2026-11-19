@@ -26,7 +26,7 @@ def error_summary(output):
 
 def undefined_name(stderr, code):
     """A JS ReferenceError for a name the snippet never declares: it continues an earlier example."""
-    match = re.search(r'ReferenceError: ([\w$]+) is not defined', stderr)
+    match = re.search(r'ReferenceError: ([\w$]+) is not defined(?! in ES module scope)', stderr)
     if not match:
         return None
     name = re.escape(match.group(1))
@@ -45,7 +45,22 @@ def undefined_name(stderr, code):
 
 def missing_env(stderr, code):
     names = {a or b for a, b in re.findall(r'process\.env(?:\.([A-Z][A-Z0-9_]+)|\[\s*[\'"]([A-Z][A-Z0-9_]+)[\'"]\s*\])', code)}
-    return any(re.search(rf'Error\b.*\b{re.escape(n)}\b', stderr) for n in names)
+    return bool(names) and (bool(re.search(r'Error: Missing\b', stderr)) or
+                            any(re.search(rf'Error\b.*\b{re.escape(n)}\b', stderr) for n in names))
+
+
+def local_import(stderr):
+    """A relative or absolute file import: the snippet expects a file from the reader's own project."""
+    match = re.search(r"Cannot find module '((?:\.{1,2}/|/)[^']+)' imported from \S*snippet\.", stderr)
+    return match and match.group(1)
+
+
+def context_reason(stderr, code):
+    if name := undefined_name(stderr, code):
+        return f'Uses `{name}` without defining it: likely continues an earlier example or expects a browser page.'
+    if path := local_import(stderr):
+        return f'Imports `{path}` from the reader\'s own project.'
+    return None
 
 
 def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
@@ -59,15 +74,19 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
     summary = error_summary(stderr)
     if re.search(r'does not provide an export named', summary):
         return 'runtime_error'
-    if re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token|Transform failed', summary, re.I):
+    if (re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token|Transform failed', summary, re.I)
+            and not re.search(r'in JSON\b|is not valid JSON|Invalid JSON', summary)):
         return 'syntax_error'
+    if local_import(summary):
+        return 'needs_context'
     if re.search(r'ModuleNotFoundError|No module named|Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND', summary, re.I):
         return 'missing_dependency'
     if re.search(r'\b(?:HTTP(?: status)?|status(?: code)?|client error)\s*:?\s*[\'\"]?40[13]\b|\b40[13]\s+(?:Unauthorized|Forbidden)\b'
                  r'|\b(?:Missing|No|Invalid|Expired) (?:\w+ )?(?:credentials?|API[ _-]?key|access token)\b'
                  r'|\b(?:AuthenticationError|UnauthorizedError)\b|failed to read the token file\b'
                  r'|(?:KeyError:\s*[\'\"]|\b(?:os\.environ|process\.env)\.)[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
-                 r'|missing (?:environment|env) (?:variable|var)\s+[\x60\'\"]?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b', summary, re.I) or missing_env(summary, code):
+                 r'|missing (?:environment|env) (?:variable|var)\s+[\x60\'\"]?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
+                 r'|[\x60\'\"][A-Z][A-Z0-9_]+[\x60\'\"] environment variable\b', summary, re.I) or missing_env(summary, code):
         return 'needs_credentials'
     if undefined_name(summary, code):
         return 'needs_context'

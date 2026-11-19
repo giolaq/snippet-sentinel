@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .classifier import classify, error_summary, final_error, undefined_name
+from .classifier import classify, error_summary, final_error, context_reason
 from .dependencies import TSX, dependencies, javascript_mode, pinned, python_package, script_name
 
 QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
@@ -243,8 +243,7 @@ process.exit(r.status === null ? 1 : r.status);
             if reason:
                 status = 'skipped'
             elif status == 'needs_context':
-                reason = (f'Uses `{undefined_name(error_summary(output), snippet.code)}` without defining it: '
-                          'likely continues an earlier example or expects a browser page.')
+                reason = context_reason(error_summary(output), snippet.code)
             result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
         except OSError as exc:
             if runner == 'docker':
