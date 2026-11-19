@@ -272,7 +272,8 @@ _stopping = threading.Event()
 
 def portable_start(pid):
     try:
-        result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], capture_output=True, text=True, timeout=2)
+        result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], capture_output=True, text=True, timeout=2,
+                                env={**os.environ, 'TZ': 'UTC', 'LC_ALL': 'C'})
         return result.stdout.strip() if result.returncode == 0 else ''
     except (OSError, subprocess.SubprocessError):
         return ''

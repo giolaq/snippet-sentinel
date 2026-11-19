@@ -108,3 +108,34 @@ def test_portable_same_host_cleanup(monkeypatch, state, removed):
     monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', fake_run)
     cleanup_stale()
     assert (['docker', 'rm', '-f', 'sandbox'] in calls) == removed
+
+
+def test_portable_live_owner_survives_timezone_and_locale_change(monkeypatch):
+    calls, environments, labels = [], [], {}
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[0] == 'ps':
+            env = dict(kwargs.get('env', os.environ))
+            environments.append(env)
+            output = f"Thu Nov 19 02:00:00 2026 {env.get('TZ')}/{env.get('LC_ALL')}"
+        else:
+            output = 'sandbox\n' if args[1] == 'ps' else json.dumps(labels) if args[1] == 'inspect' else ''
+        return subprocess.CompletedProcess(args, 0, output, '')
+
+    def missing_proc(path, *args, **kwargs):
+        raise FileNotFoundError(str(path))
+
+    monkeypatch.setattr(Path, 'read_text', missing_proc)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', fake_run)
+    monkeypatch.setattr('snippet_sentinel.runner.owner_namespace', lambda: 'host:mac')
+    monkeypatch.setattr('snippet_sentinel.runner.os.kill', lambda pid, sig: None)
+    monkeypatch.setenv('TZ', 'America/Los_Angeles')
+    monkeypatch.setenv('LC_ALL', 'fr_FR.UTF-8')
+    labels.update({'snippet-sentinel.namespace': 'host:mac', 'snippet-sentinel.owner': owner_identity()})
+    monkeypatch.setenv('TZ', 'Asia/Tokyo')
+    monkeypatch.setenv('LC_ALL', 'ja_JP.UTF-8')
+    cleanup_stale()
+    assert len(environments) == 2
+    assert all(env['TZ'] == 'UTC' and env['LC_ALL'] == 'C' for env in environments)
+    assert ['docker', 'rm', '-f', 'sandbox'] not in calls
