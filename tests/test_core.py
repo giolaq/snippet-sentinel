@@ -588,6 +588,12 @@ def test_package_export_is_not_hidden_by_later_binding(tmp_path):
     assert result['status'] == 'runtime_error' and 'exported by `pytest`' in result['reason'], result
 
 
+def test_package_submodule_name_is_not_a_missing_import():
+    code = 'import os\nimport pytest\nprint(pytest.raises, python)'
+    result = run(Snippet('py', 'a.md', 1, 'python', code), 'local', timeout=120)
+    assert 'exported by' not in result['reason'], result
+
+
 def test_repl_source_keeps_unprompted_block_bodies():
     code = '>>> def f():\n    x = 1\n    raise ValueError(x)\n>>> f()'
     assert repl_source(code) == 'def f():\n    x = 1\n    raise ValueError(x)\nf()'

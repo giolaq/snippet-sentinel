@@ -52,7 +52,7 @@ PYTHON_RUN = '''def _sentinel_main():
         for module_name, module in sorted(sys.modules.items()):
             if '.' not in module_name and 'site-packages' in (getattr(module, '__file__', None) or ''):
                 try:
-                    if getattr(module, error.name, None) is not None:
+                    if callable(getattr(module, error.name, None)):  # functions/classes, not submodules or values
                         print('SENTINEL_EXPORTED_BY=' + module_name, file=sys.stderr, flush=True)
                         break
                 except Exception:
