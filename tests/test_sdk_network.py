@@ -106,16 +106,16 @@ CASES = [
     ('javascript', "import OpenAI from 'openai';const client=new OpenAI();await client.chat.completions.create({model:'gpt-4o-mini',messages:[{role:'user',content:'hello'}]});", 'needs_credentials'),
     ('javascript', "import OpenAI from 'openai';const client=new OpenAI({apiKey:'sentinel-dummy-key'});await client.chat.completions.create({model:'gpt-4o-mini',messages:[{role:'user',content:'hello'}]});", 'needs_network'),
     ('javascript', "import Stripe from 'stripe';await new Stripe('sentinel-dummy-key').customers.list({limit:1});", 'needs_network'),
-    ('javascript', "await fetch('https://example.com');", 'needs_network'),
-    ('javascript', "import axios from 'axios';await axios.get('https://example.com');", 'needs_network'),
+    ('javascript', "await fetch('https://nodejs.org');", 'needs_network'),
+    ('javascript', "import axios from 'axios';await axios.get('https://nodejs.org');", 'needs_network'),
     ('python', "import socket,time\ntry: socket.create_connection(('example.com',443))\nexcept OSError: time.sleep(60)", 'needs_network'),
-    ('javascript', "try{await fetch('https://example.com')}catch{};await new Promise(r=>setTimeout(r,60000));", 'needs_network'),
-    ('javascript', "require('node:http').get('http://example.com').on('error',()=>setTimeout(()=>{},60000));", 'needs_network'),
+    ('javascript', "try{await fetch('https://nodejs.org')}catch{};await new Promise(r=>setTimeout(r,60000));", 'needs_network'),
+    ('javascript', "require('node:http').get('http://nodejs.org').on('error',()=>setTimeout(()=>{},60000));", 'needs_network'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nobject().renamed_method()", 'runtime_error'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\n1/0", 'runtime_error'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nraise ValueError('bad input')", 'runtime_error'),
     ('python', "import socket\nclass Exploded(Exception): pass\ntry: socket.create_connection(('example.com',443))\nexcept OSError as error: raise Exploded('bad input') from error", 'runtime_error'),
-    ('javascript', "try{await fetch('https://example.com')}catch{};({}).renamed_method();", 'runtime_error'),
+    ('javascript', "try{await fetch('https://nodejs.org')}catch{};({}).renamed_method();", 'runtime_error'),
 ]
 
 

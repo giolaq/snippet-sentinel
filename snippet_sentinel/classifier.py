@@ -7,7 +7,7 @@ BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout', 'out
 INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context', 'needs_network'}
 CAUGHT_AUTH_FAILURE = re.compile(r'AuthenticationError|Invalid API Key provided|Incorrect API key provided|'
                                  r'\b(?:statusCode|status)["\']?\s*[:=]\s*401\b|\b401 (?:Client Error: )?Unauthorized\b')
-ERROR_LINE = re.compile(r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception)|gaierror|herror|\w+(?=:))(?: \[(?P<code>[A-Z_]+)\])?'
+ERROR_LINE = re.compile(r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception)|gaierror|herror|\w+(?=:(?:[ \t]|$)))(?: \[(?P<code>[A-Z_]+)\])?'
                         r'(?::[ \t]*(?P<message>[^\n]*))?$', re.M)
 CONNECTION_ERRORS = {'APIConnectionError', 'StripeConnectionError', 'ConnectionError', 'ConnectError',
                      'EndpointConnectionError', 'NewConnectionError', 'NameResolutionError', 'gaierror', 'herror',
@@ -112,7 +112,7 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', 
         return 'missing_dependency'
     if re.search(r'\b(?:HTTP(?: status)?|status(?: code)?|client error)\s*:?\s*[\'\"]?40[13]\b|\b40[13]\s+(?:Client Error:\s*)?(?:Unauthorized|Forbidden)\b'
                  r'|\b(?:Missing|No|Invalid|Expired) (?:\w+ )?(?:credentials?|API[ _-]?key|access token)\b'
-                 r'|\b(?:AuthenticationError|UnauthorizedError|LocalTokenNotFoundError|NoCredentialsError)\b|api_key.*must be set|Unable to locate credentials|Could not resolve authentication|Neither apiKey nor config.authenticator|failed to read (?:the token file|[\\w ]*\\btoken from)\b'
+                 r'|\b(?:AuthenticationError|UnauthorizedError|LocalTokenNotFoundError|NoCredentialsError)\b|api_key.*must be set|Unable to locate credentials|Could not resolve authentication|Neither apiKey nor config.authenticator|failed to read (?:the token file|[\w ]*\btoken from)\b'
                  r'|\bCould not find credentials\b|\bcredentials? requires\b|\bauthentication failed\b'
                  r'|\b40[13] Client Error\b|\b[Tt]oken is required\b|\bmust provide an api_key\b|Could not resolve authentication method'
                  r'|User authentication is required'

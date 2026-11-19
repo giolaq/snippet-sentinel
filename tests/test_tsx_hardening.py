@@ -33,10 +33,10 @@ def test_transpiler_installed_before_isolation(monkeypatch):
 @pytest.mark.docker
 @pytest.mark.skipif(not os.environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')
 @pytest.mark.parametrize('lang,code,expected', [
-    ('typescript', "const url: string = 'https://example.com'; await fetch(url);", 'needs_network'),
-    ('typescript', "const React = {createElement: () => ({})}; const el = <b />; await fetch('https://example.com');", 'needs_network'),
-    ('javascript', "const React = {createElement: () => ({})}; const el = <b />; await fetch('https://example.com');", 'needs_network'),
-    ('typescript', "const n: number = 1; require('node:https').get('https://example.com').on('error',()=>setTimeout(()=>{},60000));", 'needs_network'),
+    ('typescript', "const url: string = 'https://nodejs.org'; await fetch(url);", 'needs_network'),
+    ('typescript', "const React = {createElement: () => ({})}; const el = <b />; await fetch('https://nodejs.org');", 'needs_network'),
+    ('javascript', "const React = {createElement: () => ({})}; const el = <b />; await fetch('https://nodejs.org');", 'needs_network'),
+    ('typescript', "const n: number = 1; require('node:https').get('https://nodejs.org').on('error',()=>setTimeout(()=>{},60000));", 'needs_network'),
     ('typescript', "import fs from 'node:fs'; const n: number = 1; for(let i=0;i<1024;i++) fs.writeSync(1,'x'.repeat(1048576));", 'output_limit'),
     ('typescript', "const fs = require('node:fs'); const n: number = 1; for(let i=0;i<1024;i++) fs.writeSync(2,'x'.repeat(1048576));", 'output_limit'),
     ('typescript', "const fs = require('node:fs'); const n: number = 1; fs.writeFileSync('/work/fill', Buffer.alloc(160*1024*1024));", 'disk_limit'),
@@ -44,7 +44,7 @@ def test_transpiler_installed_before_isolation(monkeypatch):
 ])
 def test_tsx_hardening(lang, code, expected):
     result = run(Snippet('ts', 'a.md', 1, lang, code), timeout=20 if '60000' in code else 60)
-    assert result['status'] == expected, result
+    assert result['status'] == expected, (result['status'], result['exit_code'], result['stderr'][-2000:])
     if expected == 'needs_network':
         assert 'SENTINEL_NETWORK_BLOCKED' in result['stderr']
     if 'dead-docs.invalid' in code:
