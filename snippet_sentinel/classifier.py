@@ -13,9 +13,13 @@ def undefined_name(stderr, code):
     if not match:
         return None
     name = re.escape(match.group(1))
+    code = re.sub(r'/\*.*?\*/|(?<![:\w])//[^\n]*', '', code, flags=re.S)
     declared = (rf'\b(?:const|let|var|class|function\s*\*?)\s+{name}\b',
                 rf'\b(?:const|let|var)\s*[{{\[][^=;]*\b{name}\b',
-                rf'\bimport\b[^;]*?\b{name}\b[^;]*?\bfrom\b')
+                rf'\bimport\b[^;]*?\b{name}\b[^;]*?\bfrom\b',
+                rf'\bcatch\s*\(\s*{name}\b',
+                rf'\bfunction\b[^(]*\([^)]*\b{name}\b[^)]*\)',
+                rf'(?:\([^()]*\b{name}\b[^()]*\)|\b{name})\s*=>')
     if any(re.search(pattern, code) for pattern in declared):
         return None
     return match.group(1)

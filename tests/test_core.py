@@ -127,6 +127,10 @@ def test_classifier(message, code, expected):
     ('ReferenceError: client is not defined', 1, 'if (x) { const client = 1; }\nclient.go();', 'runtime_error'),
     ('ReferenceError: Stripe is not defined', 1, "import { Stripe } from 'stripe';", 'runtime_error'),
     ('ReferenceError: a is not defined', 1, 'const { a, b } = c;', 'runtime_error'),
+    ('ReferenceError: err is not defined', 1, 'try { x(); } catch (err) {}\nconsole.log(err);', 'runtime_error'),
+    ('ReferenceError: item is not defined', 1, 'list.forEach((item) => 1);\nitem.go();', 'runtime_error'),
+    ('ReferenceError: client is not defined', 1, '// const client = new Client();\nclient.request();', 'needs_context'),
+    ('ReferenceError: client is not defined', 1, '/* const client = new Client(); */\nclient.request();', 'needs_context'),
 ])
 def test_javascript_verdicts(stderr, exit_code, code, expected):
     assert classify(stderr, exit_code, code=code) == expected
