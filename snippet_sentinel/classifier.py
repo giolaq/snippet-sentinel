@@ -1,5 +1,6 @@
 import re
 
+from .dependencies import BUILTINS
 from .network_guard import MARKER
 
 BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout', 'output_limit', 'disk_limit'}
@@ -30,9 +31,11 @@ def error_summary(output):
 
 
 def undefined_name(stderr, code):
-    """A JS ReferenceError for a name the snippet never declares: it continues an earlier example."""
+    """An undeclared app/browser name, rather than a missing Node builtin import."""
     match = re.search(r'ReferenceError: ([\w$]+) is not defined(?! in ES module scope)', stderr)
     if not match:
+        return None
+    if match.group(1) in BUILTINS:
         return None
     name = re.escape(match.group(1))
     code = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/|//[^\n]*''',
