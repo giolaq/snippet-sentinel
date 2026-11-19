@@ -16,7 +16,7 @@ dev = ["pytest", "httpx"]
 snippet-sentinel = "snippet_sentinel.cli:main"
 
 [tool.setuptools.package-data]
-snippet_sentinel = ["templates/*.html"]
+snippet_sentinel = ["templates/*.html", "network_guard.cjs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

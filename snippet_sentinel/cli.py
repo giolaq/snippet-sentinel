@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from .scan import DEFAULT_MAX_SNIPPETS, scan
+from .runner import cleanup_active, install_signal_handlers
 from .web import create_app, render_run
 
 
@@ -29,6 +30,7 @@ def main():
     scanner.add_argument('--ref')
     scanner.add_argument('--lang', choices=['python', 'javascript', 'typescript'])
     scanner.add_argument('--runner', choices=['docker', 'local'], default='docker')
+    scanner.add_argument('--allow-network', action='store_true', help='Allow Docker snippets network access (trusted docs only); dependency installation always has network')
     scanner.add_argument('--jobs', type=positive, default=4)
     scanner.add_argument('--timeout', type=positive, default=60)
     scanner.add_argument('--max-snippets', type=nonnegative, default=DEFAULT_MAX_SNIPPETS,
@@ -62,15 +64,22 @@ def main():
         if job['error']:
             parser.exit(1, f"Fix failed: {job['error']}\n")
         return
+    install_signal_handlers()
     if args.command == 'serve':
         import uvicorn
-        uvicorn.run(create_app(args.db), host=args.host, port=args.port)
+
+        class Server(uvicorn.Server):
+            def handle_exit(self, sig, frame):
+                cleanup_active()
+                super().handle_exit(sig, frame)
+
+        Server(uvicorn.Config(create_app(args.db), host=args.host, port=args.port)).run()
         return
     if args.runner == 'local':
         print('WARNING: local runner is UNSANDBOXED. Only scan trusted code.', file=sys.stderr)
     try:
         result = scan(args.source, args.db, args.ref, args.lang, args.runner, args.jobs, args.timeout, args.pin,
-                      max_snippets=args.max_snippets, progress=lambda message: print(message, file=sys.stderr, flush=True))
+                      allow_network=args.allow_network, max_snippets=args.max_snippets, progress=lambda message: print(message, file=sys.stderr, flush=True))
     except Exception as exc:
         parser.exit(1, f'Scan failed: {exc}\n')
     print(f"Run {result['id']} | {result['repo']} | {result['ref']} | runner={args.runner}")

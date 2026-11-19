@@ -3,17 +3,23 @@ import difflib
 import json
 import os
 import re
+import selectors
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
+import threading
 import uuid
 from pathlib import Path
 
 from .classifier import BROKEN, classify, error_summary, final_error, context_reason
 from .dependencies import TSX, dependencies, javascript_mode, pinned, python_package, script_name
+from .network_guard import MARKER
+from .network_diagnostics import blocked_hosts, dead_host
 
 QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
 ERROR_PATHS = re.compile(rf'({QUOTED_PATH})(?: -> ({QUOTED_PATH}))?')
@@ -70,6 +76,10 @@ class InfrastructureError(RuntimeError):
         super().__init__("Docker couldn't run this snippet — start Docker (or check DOCKER_HOST) and retry.\n" + str(diagnostics))
 
 
+class _RetryTimeout(Exception):
+    pass
+
+
 def missing_placeholder_path(code, message, frames):
     _, separator, filenames = message.partition(': ')
     if separator:
@@ -114,13 +124,13 @@ def javascript_placeholder(code, error):
     if path and path.group(1) in code:
         return f'requires replacing the placeholder path: {path.group(1)}'
     host = PLACEHOLDER_HOST.search(code)
-    if host and re.search(r'ENOTFOUND|ECONNREFUSED|fetch failed|\b40[04]\b|Invalid JSON', error):
+    if host and re.search(r'ENOTFOUND|ECONNREFUSED|fetch failed|Network disabled by Snippet Sentinel|\b40[04]\b|Invalid JSON', error):
         return f'requires replacing the placeholder host: {host.group(1)}'
     return ''
 
 
 def documented_failure(snippet, status, output):
-    if status not in {'syntax_error', 'runtime_error', 'missing_dependency', 'needs_credentials', 'needs_context'}:
+    if status not in {'syntax_error', 'runtime_error', 'missing_dependency', 'needs_credentials', 'needs_context', 'needs_network'}:
         return ''
     error = final_error(output)
     if not error:
@@ -209,7 +219,8 @@ def python_inconclusive(code, status, output, exit_code=None):
     name, message = error['name'], error['message'] or ''
     frames = re.findall(r'^  File "([^"\n]+)", line \d+, in ', output[:error.start()], re.M)
     if (name.endswith('MissingDependencyError') or name in {'ImportError', 'ModuleNotFoundError'}
-            and re.search(r'pip install|to be installed|install it\b|Use pip\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
+            and re.search(r'pip install|to be installed|install it\b|Use pip\b', message, re.I)) and frames and (
+                'site-packages' in frames[-1] or frames[-1].startswith('/work/.packages/')):
         return 'needs_context', f'The SDK needs an optional dependency the docs ask readers to install: {message[:120]}'
     if path := READER_INPUT.search(message):
         return 'needs_context', f'Needs a local file or directory the reader provides: {next(filter(None, path.groups()))}'
@@ -257,24 +268,174 @@ def reader_value(code, missing):
     return 'needs_context', f'Uses `{missing}`, a value the reader supplies (an ID or input defined outside the docs).'
 
 
-def command(args, cwd, timeout, env=None):
-    with tempfile.TemporaryFile() as output:
-        process = subprocess.Popen(args, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
-        timed_out = False
+OUTPUT_LIMIT = 2 * 1024 * 1024
+SANDBOX_LABEL = 'snippet-sentinel.sandbox'
+_active = set()
+_lock = threading.Lock()
+_stopping = threading.Event()
+
+
+def portable_start(pid):
+    try:
+        result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], capture_output=True, text=True, timeout=2,
+                                env={**os.environ, 'TZ': 'UTC', 'LC_ALL': 'C'})
+        return result.stdout.strip() if result.returncode == 0 else ''
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def owner_identity():
+    try:
+        started = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
+        return f'{os.getpid()}:{started}'
+    except (OSError, IndexError):
+        started = portable_start(os.getpid())
+        return f'{os.getpid()}:ps-{started}' if started else f'{os.getpid()}:unknown-{socket.gethostname()}'
+
+
+def owner_namespace():
+    try:
+        return os.readlink('/proc/self/ns/pid')
+    except OSError:
+        return f'host:{socket.gethostname()}'
+
+
+def owner_container():
+    try:
+        mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+    except OSError:
+        return ''
+    for line in mounts:
+        fields = line.split()
+        if len(fields) > 4 and fields[4] == '/etc/hostname':
+            match = re.search(r'/containers/([a-f0-9]{64})/hostname$', fields[3])
+            if match:
+                return match[1]
+    return ''
+
+
+def cleanup_stale():
+    try:
+        _cleanup_stale()
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
+        pass
+
+
+def _cleanup_stale():
+    namespace = owner_namespace()
+    listing = subprocess.run(['docker', 'ps', '-aq', '--filter', f'label={SANDBOX_LABEL}=true'],
+                             capture_output=True, text=True, timeout=10)
+    for name in listing.stdout.split():
+        info = subprocess.run(['docker', 'inspect', '-f', '{{json .Config.Labels}}', name],
+                              capture_output=True, text=True, timeout=10)
+        if info.returncode:
+            continue
+        labels = json.loads(info.stdout)
+        if namespace and labels.get('snippet-sentinel.namespace') == namespace:
+            try:
+                pid, started = labels.get('snippet-sentinel.owner', '').split(':', 1)
+                pid = int(pid)
+                if pid <= 0:
+                    continue
+                if namespace.startswith('host:'):
+                    os.kill(pid, 0)
+                    current = portable_start(pid)
+                    live = not (started.startswith('ps-') and current and started[3:] != current)
+                else:
+                    live = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19] == started
+            except ProcessLookupError:
+                live = False
+            except FileNotFoundError:
+                live = False
+            except (ValueError, OSError, IndexError):
+                live = True
+        elif labels.get('snippet-sentinel.owner-container'):
+            parent = subprocess.run(['docker', 'inspect', '-f', '{{.State.Running}}', labels['snippet-sentinel.owner-container']],
+                                    capture_output=True, text=True, timeout=10)
+            if parent.returncode and 'No such' not in parent.stderr:
+                continue
+            live = parent.returncode == 0 and parent.stdout.strip() == 'true'
+        else:
+            continue
+        if not live:
+            subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=10)
+
+
+def cleanup_active():
+    _stopping.set()
+    with _lock:
+        names = list(_active)
+    if names:
         try:
-            process.wait(timeout=max(.01, timeout))
+            subprocess.run(['docker', 'rm', '-f', *names], capture_output=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def stop_sandboxes(signum, frame):
+    cleanup_active()
+    raise SystemExit(128 + signum)
+
+
+def install_signal_handlers():
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, stop_sandboxes)
+
+
+def command(args, cwd, timeout, env=None, stdin=None, budget=None):
+    process = subprocess.Popen(args, cwd=cwd, env=env, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               start_new_session=True)
+    output = bytearray()
+    timed_out = False
+    exceeded = False
+    deadline = time.monotonic() + max(.01, timeout)
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                if not selector.select(remaining):
+                    timed_out = True
+                    break
+                chunk = os.read(process.stdout.fileno(), 65536)
+                if not chunk:
+                    process.wait(timeout=max(.01, deadline - time.monotonic()))
+                    break
+                if budget is not None:
+                    budget[0] -= len(chunk)
+                if len(output) + len(chunk) > OUTPUT_LIMIT or (budget is not None and budget[0] < 0):
+                    exceeded = True
+                    break
+                output.extend(chunk)
         except subprocess.TimeoutExpired:
             timed_out = True
-            os.killpg(process.pid, signal.SIGKILL)
+        finally:
+            if process.poll() is None or timed_out or exceeded:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             process.wait()
-        output.seek(0, 2)
-        size = output.tell()
-        output.seek(max(0, size - 16000))
-        return output.read().decode(errors='replace'), process.returncode, timed_out
+            process.stdout.close()
+    decoded = output.decode(errors='replace')
+    tail = output[-16000:].decode(errors='replace')
+    error = final_error(decoded)
+    if error and error[0] not in tail:
+        tail = error[0][:512] + '\n' + tail
+    if MARKER.encode() in output and MARKER not in tail:
+        tail = MARKER + '\n' + tail
+    hosts = blocked_hosts(decoded)
+    if hosts:
+        tail = ''.join(MARKER + ' ' + json.dumps(host) + '\n' for host in hosts) + tail
+    if exceeded:
+        tail += '\nSENTINEL_OUTPUT_LIMIT: output limit exceeded (2 MiB)'
+    return tail, process.returncode, timed_out
 
 
-def run(snippet, runner='docker', timeout=60, pins=()):
+def run(snippet, runner='docker', timeout=60, pins=(), allow_network=False):
     result = {**snippet.dict(), 'runner': runner, 'versions': {}, 'stderr': '', 'exit_code': None}
     if snippet.reason:
         return {**result, 'status': 'skipped'}
@@ -287,9 +448,25 @@ def run(snippet, runner='docker', timeout=60, pins=()):
     transpile = filename.endswith(('.ts', '.tsx', '.jsx'))
     name = 'sentinel-' + uuid.uuid4().hex
     started = time.monotonic()
+    budget = [OUTPUT_LIMIT]
+    names = set()
+    retry_output = None
+
+    def execute(args, cwd, remaining, env=None, stdin=None):
+        if retry_output is not None and remaining <= 0:
+            raise _RetryTimeout('')
+        output, rc, expired = command(args, cwd, remaining, env, stdin, budget)
+        if retry_output is not None and (expired or time.monotonic() - started >= timeout):
+            raise _RetryTimeout(output)
+        return output, rc, expired
+
     with tempfile.TemporaryDirectory(prefix='sentinel-') as directory:
         path = Path(directory)
         path.joinpath(filename).write_text(code)
+        if runner == 'docker' and not allow_network:
+            path.joinpath('network_guard.py').write_text(Path(__file__).with_name('network_guard.py').read_text())
+            path.joinpath('network_guard.cjs').write_text(Path(__file__).with_name('network_guard.cjs').read_text())
+            path.joinpath('sitecustomize.py').write_text("import os\nif os.environ.get('SENTINEL_NETWORK_DISABLED') == '1':\n from network_guard import install\n install()\n")
         # A tiny worker keeps package discovery and execution identical across backends.
         worker = '''import json, subprocess, sys
 packages, specs, python, filename = json.loads(sys.argv[1])[:4]
@@ -317,17 +494,32 @@ sys.exit(subprocess.call([sys.executable, 'sentinel_run.py', filename] if python
         if not python:
             js_worker = '''const {spawnSync} = require('node:child_process');
 const fs = require('node:fs');
-const [packages,specs,,filename,transpile,esm] = JSON.parse(process.argv[2]);
-const installs = transpile ? [...specs, %r] : specs;
-if (transpile) fs.writeFileSync('package.json', JSON.stringify({type: esm ? 'module' : 'commonjs'}));
+const [packages,specs,,filename,transpile,esm,prepared] = JSON.parse(process.argv[2]);
+const installs = transpile && !prepared ? [...specs, %r] : specs;
+if (transpile) {
+ const manifest = fs.existsSync('package.json') ? JSON.parse(fs.readFileSync('package.json', 'utf8')) : {};
+ fs.writeFileSync('package.json', JSON.stringify({...manifest, type: esm ? 'module' : 'commonjs'}));
+}
 if (installs.length) {
  const p = spawnSync('npm', ['install','--no-audit','--no-fund','--',...installs], {encoding:'utf8'});
  if(p.status !== 0) { console.log('SENTINEL_INSTALL_FAILED'); console.log(p.stdout, p.stderr); process.exit(p.status || 1); }
 }
-const p = spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'});
-const deps = JSON.parse(p.stdout || '{}').dependencies || {};
-console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries(packages.filter(x=>deps[x]).map(x=>[x,deps[x].version]))));
-const exec = (file) => spawnSync(transpile ? 'node_modules/.bin/tsx' : 'node', [file], {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
+const versions = (names) => Object.fromEntries(names.flatMap(name => {
+ try { return [[name, JSON.parse(fs.readFileSync('node_modules/' + name + '/package.json', 'utf8')).version]]; }
+ catch { return []; }
+}));
+console.log('SENTINEL_VERSIONS='+JSON.stringify(versions(packages)));
+const exec = (file) => {
+ const r = spawnSync('node', [...(transpile ? ['--import', 'tsx'] : []), file], {
+  stdio: ['inherit', 'inherit', 'pipe', 2], env: {...process.env, SENTINEL_NETWORK_MARKER_FD: '3'},
+  encoding: 'utf8', maxBuffer: 2 * 1024 * 1024
+ });
+ if (r.error && r.error.code === 'ENOBUFS') {
+  fs.writeSync(2, 'SENTINEL_OUTPUT_LIMIT: output limit exceeded (2 MiB)\\n');
+  process.exit(1);
+ }
+ return r;
+};
 const attempt = () => {
  const r = exec(filename);
  if (esm || r.status === 0 || !/SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)|Top-level await is currently not supported with the "cjs" output format/.test(r.stderr || '')) return r;
@@ -339,57 +531,29 @@ const attempt = () => {
  return exec(wrapped);
 };
 let r = attempt();
-// SDKs import optional peer dependencies (ws, undici, ...) that their docs install separately.
 const peer = /Cannot find (?:package|module) '((?:@[\\w.-]+\\/)?[\\w.-]+)[^']*'(?: imported from |\\nRequire stack:\\n- )\\S*\\/node_modules\\//;
 const peers = [];
 for (let m; r.status !== 0 && peers.length < 3 && (m = peer.exec(r.stderr || '')) && !peers.includes(m[1]);) {
+ if (process.env.SENTINEL_NETWORK_DISABLED === '1') {
+  process.stderr.write(r.stderr);
+  console.log('SENTINEL_NEED_PEER=' + m[1]);
+  process.exit(86);
+ }
  peers.push(m[1]);
- if (spawnSync('npm', ['install','--no-audit','--no-fund','--',m[1]], {encoding:'utf8'}).status !== 0) break;
+ const installed = spawnSync('npm', ['install','--no-audit','--no-fund','--',m[1]], {stdio: 'inherit'});
+ if (installed.status !== 0) {
+  console.log('SENTINEL_INSTALL_FAILED');
+  process.exit(installed.status || 1);
+ }
  r = attempt();
 }
-if (peers.length) {
- const all = JSON.parse(spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'}).stdout || '{}').dependencies || {};
- console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries([...packages, ...peers].filter(x=>all[x]).map(x=>[x,all[x].version]))));
-}
+if (peers.length) console.log('SENTINEL_VERSIONS='+JSON.stringify(versions([...packages, ...peers])));
 if (r.stderr) process.stderr.write(r.stderr);
 if (r.error) console.error(r.error);
 process.exit(r.status === null ? 1 : r.status);
 '''
             path.joinpath('worker.cjs').write_text(js_worker % TSX)
-        try:
-            if runner == 'docker':
-                # Copy instead of bind mounting: works with the dashboard's socket mount.
-                image = 'python:3.12-slim' if python else 'node:22-slim'
-                out, rc, expired = command(['docker', 'create', '--name', name, '--memory', '512m', '--cpus', '1',
-                    '--pids-limit', '256', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-                    '--workdir', '/work', image, 'python' if python else 'node',
-                    'worker.py' if python else 'worker.cjs', payload], directory, timeout)
-                if rc or expired:
-                    raise InfrastructureError(f'Docker container creation failed (image/daemon unavailable): {out or "timed out"}')
-                out, rc, expired = command(['docker', 'cp', directory + '/.', name + ':/work'], directory, timeout - (time.monotonic() - started))
-                if rc or expired:
-                    raise InfrastructureError(f'Docker container setup failed: {out or "timed out"}')
-                out, rc, expired = command(['docker', 'start', '-a', name], directory, timeout - (time.monotonic() - started))
-                if not expired:
-                    inspect = subprocess.run(['docker', 'inspect', '-f', '{{json .State}}', name], capture_output=True, text=True)
-                    if inspect.returncode:
-                        raise InfrastructureError(f'Docker container inspection failed: {inspect.stderr}')
-                    state = json.loads(inspect.stdout)
-                    if state.get('Error') or state.get('Status') != 'exited':
-                        raise InfrastructureError(f'Docker container start failed: {state.get("Error") or out}')
-                    rc = state['ExitCode']
-            else:
-                env = {'PATH': os.environ.get('PATH', ''), 'HOME': directory, 'LANG': 'C.UTF-8'}
-                executable = sys.executable
-                if python:
-                    out, rc, expired = command([sys.executable, '-m', 'venv', str(path / 'venv')], directory, timeout, env)
-                    if rc or expired:
-                        return {**result, 'status': 'timeout' if expired else 'runtime_error', 'stderr': out, 'exit_code': rc}
-                    executable = str(path / 'venv/bin/python')
-                elif not shutil.which('node') or not shutil.which('npm'):
-                    return {**result, 'status': 'runtime_error', 'stderr': 'Local JavaScript runner requires node and npm (UNSANDBOXED).'}
-                args = [executable, 'worker.py', payload] if python else ['node', 'worker.cjs', payload]
-                out, rc, expired = command(args, directory, timeout - (time.monotonic() - started), env)
+        def finish(out, rc, expired):
             lines = []
             for line in out.splitlines():
                 if line.startswith('SENTINEL_VERSIONS='):
@@ -403,14 +567,21 @@ process.exit(r.status === null ? 1 : r.status);
             lines = [line for line in lines if not line.startswith('SENTINEL_EXPORTED_BY=')]
             install_failed = 'SENTINEL_INSTALL_FAILED' in lines
             output = '\n'.join(lines)
-            status = classify(output, rc, expired, install_failed, code)
+            status = classify(output, rc, expired, install_failed, code,
+                              network_disabled=runner == 'docker' and not allow_network)
+            reason = documented_failure(snippet, status, output) if not install_failed else ''
+            if status == 'needs_network' and not reason and runner == 'docker' and not allow_network:
+                host = dead_host(output)
+                if host:
+                    status = 'runtime_error'
+                    output += f'\nhost {host} does not resolve (dead URL in docs)'
             if install_failed:
                 reason = illustrative_dependency(snippet, output) if status == 'missing_dependency' else ''
             else:
                 reason = documented_failure(snippet, status, output)
             if exported_by and reason.startswith('requires example setup'):
                 reason = ''
-            inconclusive = (python and not reason and not exported_by and status in BROKEN
+            inconclusive = (python and not reason and not exported_by and status in BROKEN - {'output_limit', 'disk_limit'}
                             and python_inconclusive(code, status, output, rc))
             if python and expired and specs and 'SENTINEL_VERSIONS=' not in out and len(out.encode()) < 15000:
                 inconclusive = 'skipped', 'Installing dependencies exceeded the time limit; not evaluated.'
@@ -424,14 +595,114 @@ process.exit(r.status === null ? 1 : r.status);
                 missing = re.match(r"name '(\w+)'", error['message'] or '')
                 reason = f'`{missing[1] if missing else "name"}` is exported by `{exported_by}` but the snippet never imports it.'
             result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
+
+        try:
+            if runner == 'docker':
+                peers = []
+                while True:
+                    if time.monotonic() - started >= timeout:
+                        if retry_output is not None:
+                            raise _RetryTimeout('')
+                        out, rc, expired = '', -9, True
+                        break
+                    if _stopping.is_set():
+                        raise InfrastructureError('Scan interrupted')
+                    names.add(name)
+                    with _lock:
+                        _active.add(name)
+                    image = 'python:3.12-slim' if python else 'node:22-slim'
+                    out, rc, expired = execute(['docker', 'create', '--name', name, '--memory', '512m', '--cpus', '1',
+                        '--pids-limit', '256', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                        '--label', f'{SANDBOX_LABEL}=true', '--label', f'snippet-sentinel.owner={owner_identity()}',
+                        '--label', f'snippet-sentinel.namespace={owner_namespace()}',
+                        '--label', f'snippet-sentinel.owner-container={owner_container()}',
+                        '--read-only', '--tmpfs', '/work:rw,exec,nosuid,size=128m',
+                        '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '--log-driver', 'none',
+                        '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work:/work/.packages',
+                        '--env', 'PATH=/work/.packages/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                        '--env', 'PYTHONDONTWRITEBYTECODE=1', '--workdir', '/work', image,
+                        '/usr/local/bin/python' if python else '/usr/local/bin/node', '-c' if python else '-e',
+                        'import time; time.sleep(86400)' if python else 'setInterval(()=>{},86400000)'], directory, timeout - (time.monotonic() - started))
+                    if rc or expired:
+                        raise InfrastructureError(f'Docker container creation failed (image/daemon unavailable): {out or "timed out"}')
+                    if _stopping.is_set():
+                        raise InfrastructureError('Scan interrupted')
+                    out, rc, expired = execute(['docker', 'start', name], directory, timeout - (time.monotonic() - started))
+                    if rc or expired:
+                        raise InfrastructureError(f'Docker container start failed: {out or "timed out"}')
+                    with tempfile.TemporaryFile() as archive:
+                        with tarfile.open(fileobj=archive, mode='w') as tar:
+                            tar.add(directory, arcname='.')
+                        archive.seek(0)
+                        out, rc, expired = execute(['docker', 'exec', '-i', name, '/bin/tar', '--no-same-owner', '-x', '-C', '/work'],
+                                                  directory, timeout - (time.monotonic() - started), stdin=archive)
+                    if rc or expired:
+                        raise InfrastructureError(f'Docker container setup failed: {out or "timed out"}')
+                    install_out = ''
+                    install_specs = [*specs, *peers, *([TSX] if transpile else [])]
+                    if install_specs:
+                        install = ['/usr/local/bin/python', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--target', '/work/.packages', *install_specs] if python else ['/usr/local/bin/npm', 'install', '--no-audit', '--no-fund', '--', *install_specs]
+                        install_out, rc, expired = execute(['docker', 'exec', '--env', 'TMPDIR=/work', '--env', 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', name, *install], directory, timeout - (time.monotonic() - started))
+                    if rc or expired or 'SENTINEL_OUTPUT_LIMIT:' in install_out:
+                        out = 'SENTINEL_INSTALL_FAILED\n' + install_out
+                    else:
+                        if not allow_network:
+                            out, rc, expired = execute(['docker', 'network', 'disconnect', 'bridge', name], directory, timeout - (time.monotonic() - started))
+                            if rc or expired:
+                                raise InfrastructureError(f'Docker network isolation failed: {out or "timed out"}')
+                        payload = json.dumps([[*packages, *peers], [], python, filename, transpile, esm, True])
+                        guarded = ['--env', 'SENTINEL_NETWORK_DISABLED=1', '--env', 'NODE_OPTIONS=--require=/work/network_guard.cjs'] if not allow_network else []
+                        out, rc, expired = execute(['docker', 'exec', *guarded, name, '/usr/local/bin/python' if python else '/usr/local/bin/node',
+                                                   'worker.py' if python else 'worker.cjs', payload], directory, timeout - (time.monotonic() - started))
+                    if python or allow_network or rc != 86 or expired or 'SENTINEL_OUTPUT_LIMIT:' in out:
+                        break
+                    peer = re.search(r'^SENTINEL_NEED_PEER=((?:@[\w.-]+/)?[A-Za-z0-9][\w.-]*)$', out, re.M)
+                    if not peer or peer[1] in peers or len(peers) == 3:
+                        break
+                    retry_output = ((retry_output or '') + '\n' + out)[-16000:]
+                    removed, remove_rc, remove_expired = execute(['docker', 'rm', '-f', name], directory, timeout - (time.monotonic() - started))
+                    if remove_rc or remove_expired:
+                        if remove_expired or 'SENTINEL_OUTPUT_LIMIT:' in removed:
+                            out, rc, expired = removed, remove_rc, remove_expired
+                            break
+                        raise InfrastructureError(f'Docker sandbox removal failed before peer installation: {removed}')
+                    names.discard(name)
+                    with _lock:
+                        _active.discard(name)
+                    peers.append(peer[1])
+                    name = 'sentinel-' + uuid.uuid4().hex
+            else:
+                env = {'PATH': os.environ.get('PATH', ''), 'HOME': directory, 'LANG': 'C.UTF-8'}
+                executable = sys.executable
+                if python:
+                    out, rc, expired = execute([sys.executable, '-m', 'venv', str(path / 'venv')], directory, timeout, env)
+                    if rc or expired:
+                        return {**result, 'status': 'timeout' if expired else 'runtime_error', 'stderr': out, 'exit_code': rc}
+                    executable = str(path / 'venv/bin/python')
+                elif not shutil.which('node') or not shutil.which('npm'):
+                    return {**result, 'status': 'runtime_error', 'stderr': 'Local JavaScript runner requires node and npm (UNSANDBOXED).'}
+                args = [executable, 'worker.py', payload] if python else ['node', 'worker.cjs', payload]
+                out, rc, expired = execute(args, directory, timeout - (time.monotonic() - started), env)
+            finish(out, rc, expired)
+        except _RetryTimeout as exc:
+            output = retry_output + '\n' + str(exc) + '\nOptional-peer retry timed out'
+            finish(output, -9, True)
+        except InfrastructureError as exc:
+            if retry_output is None or _stopping.is_set():
+                raise
+            result.update(status='runtime_error', stderr=retry_output[-6000:] + '\n' + str(exc)[-1500:], exit_code=1)
         except OSError as exc:
             if runner == 'docker':
                 raise InfrastructureError(f'Docker unavailable: {exc}') from exc
             result.update(status='runtime_error', stderr=str(exc))
         finally:
             if runner == 'docker':
-                try:
-                    subprocess.run(['docker', 'rm', '-f', name], capture_output=True)
-                except OSError:
-                    pass
+                for name in names:
+                    try:
+                        subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=10)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+                    finally:
+                        with _lock:
+                            _active.discard(name)
     return result
