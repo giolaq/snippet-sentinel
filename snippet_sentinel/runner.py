@@ -76,6 +76,10 @@ class InfrastructureError(RuntimeError):
         super().__init__("Docker couldn't run this snippet — start Docker (or check DOCKER_HOST) and retry.\n" + str(diagnostics))
 
 
+class _RetryTimeout(Exception):
+    pass
+
+
 def missing_placeholder_path(code, message, frames):
     _, separator, filenames = message.partition(': ')
     if separator:
@@ -445,9 +449,15 @@ def run(snippet, runner='docker', timeout=60, pins=(), allow_network=False):
     started = time.monotonic()
     budget = [OUTPUT_LIMIT]
     names = set()
+    retry_output = None
 
     def execute(args, cwd, remaining, env=None, stdin=None):
-        return command(args, cwd, remaining, env, stdin, budget)
+        if retry_output is not None and remaining <= 0:
+            raise _RetryTimeout('')
+        output, rc, expired = command(args, cwd, remaining, env, stdin, budget)
+        if retry_output is not None and (expired or time.monotonic() - started >= timeout):
+            raise _RetryTimeout(output)
+        return output, rc, expired
 
     with tempfile.TemporaryDirectory(prefix='sentinel-') as directory:
         path = Path(directory)
@@ -547,6 +557,8 @@ process.exit(r.status === null ? 1 : r.status);
                 peers = []
                 while True:
                     if time.monotonic() - started >= timeout:
+                        if retry_output is not None:
+                            raise _RetryTimeout('')
                         out, rc, expired = '', -9, True
                         break
                     if _stopping.is_set():
@@ -603,6 +615,7 @@ process.exit(r.status === null ? 1 : r.status);
                     peer = re.search(r'^SENTINEL_NEED_PEER=((?:@[\w.-]+/)?[A-Za-z0-9][\w.-]*)$', out, re.M)
                     if not peer or peer[1] in peers or len(peers) == 3:
                         break
+                    retry_output = ((retry_output or '') + '\n' + out)[-16000:]
                     removed, remove_rc, remove_expired = execute(['docker', 'rm', '-f', name], directory, timeout - (time.monotonic() - started))
                     if remove_rc or remove_expired:
                         if remove_expired or 'SENTINEL_OUTPUT_LIMIT:' in removed:
@@ -667,6 +680,14 @@ process.exit(r.status === null ? 1 : r.status);
                 missing = re.match(r"name '(\w+)'", error['message'] or '')
                 reason = f'`{missing[1] if missing else "name"}` is exported by `{exported_by}` but the snippet never imports it.'
             result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
+        except _RetryTimeout as exc:
+            output = retry_output[-6000:] + '\n' + str(exc)[-1500:] + '\nOptional-peer retry timed out'
+            result.update(status='output_limit' if 'SENTINEL_OUTPUT_LIMIT:' in str(exc) else 'timeout',
+                          stderr=output, exit_code=-9)
+        except InfrastructureError as exc:
+            if retry_output is None or _stopping.is_set():
+                raise
+            result.update(status='runtime_error', stderr=retry_output[-6000:] + '\n' + str(exc)[-1500:], exit_code=1)
         except OSError as exc:
             if runner == 'docker':
                 raise InfrastructureError(f'Docker unavailable: {exc}') from exc

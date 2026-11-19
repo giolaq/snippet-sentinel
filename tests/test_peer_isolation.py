@@ -102,9 +102,73 @@ def test_peer_removal_failure_never_creates_a_networked_replacement(monkeypatch)
 
     monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
     monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *a, **kw: None)
-    with pytest.raises(InfrastructureError, match='removal refused'):
-        run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
+    result = run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
+    assert result['status'] == 'runtime_error', result
+    assert 'removal refused' in result['stderr']
     assert sum(args[:2] == ['docker', 'create'] for args in calls) == 1
+
+
+@pytest.mark.parametrize('stage', ['before_create', 'remove', 'create', 'start', 'copy', 'install', 'disconnect', 'run'])
+def test_peer_retry_deadline_is_a_snippet_timeout_with_previous_output(monkeypatch, stage):
+    calls, cleanups = [], []
+    clock = [0]
+    attempts = 0
+
+    def fake_command(args, *unused):
+        nonlocal attempts
+        calls.append(args)
+        if args[:2] == ['docker', 'create']:
+            attempts += 1
+        if attempts == 1 and 'worker.cjs' in args:
+            return 'earlier snippet output\nSENTINEL_VERSIONS={"sdk":"1"}\nSENTINEL_NEED_PEER=ws', 86, False
+        if stage == 'before_create' and args[:3] == ['docker', 'rm', '-f']:
+            clock[0] = 100
+            return '', 0, False
+        timed_stage = ((stage == 'remove' and args[:3] == ['docker', 'rm', '-f']) or
+                       (attempts == 2 and ((stage == 'create' and args[:2] == ['docker', 'create']) or
+                        (stage == 'start' and args[:2] == ['docker', 'start']) or
+                        (stage == 'copy' and '/bin/tar' in args) or
+                        (stage == 'install' and '/usr/local/bin/npm' in args) or
+                        (stage == 'disconnect' and args[:3] == ['docker', 'network', 'disconnect']) or
+                        (stage == 'run' and 'worker.cjs' in args))))
+        return ('retry diagnostic', -9, True) if timed_stage else ('', 0, False)
+
+    monkeypatch.setattr('snippet_sentinel.runner.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda args, **kw: cleanups.append(args))
+    result = run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'), timeout=60)
+    assert result['status'] == 'timeout', result
+    assert 'earlier snippet output' in result['stderr']
+    assert 'Optional-peer retry timed out' in result['stderr']
+    assert cleanups
+    if stage != 'before_create':
+        assert 'retry diagnostic' in result['stderr']
+
+
+@pytest.mark.parametrize('retry', [False, True])
+def test_only_initial_create_failure_is_infrastructure(monkeypatch, retry):
+    attempts = 0
+
+    def fake_command(args, *unused):
+        nonlocal attempts
+        if args[:2] == ['docker', 'create']:
+            attempts += 1
+            if attempts == (2 if retry else 1):
+                return 'Docker create failed', 1, False
+        if 'worker.cjs' in args:
+            return 'earlier snippet output\nSENTINEL_NEED_PEER=ws', 86, False
+        return '', 0, False
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *a, **kw: None)
+    if retry:
+        result = run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
+        assert result['status'] == 'runtime_error', result
+        assert 'earlier snippet output' in result['stderr']
+        assert 'Docker create failed' in result['stderr']
+    else:
+        with pytest.raises(InfrastructureError, match='Docker create failed'):
+            run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
 
 
 def test_placeholder_precedes_dns_diagnostic(monkeypatch):
