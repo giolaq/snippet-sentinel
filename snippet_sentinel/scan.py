@@ -24,6 +24,7 @@ def scan(source, db='sentinel.db', ref=None, lang=None, runner='docker', jobs=4,
     remote = github_url(source) if '://' in source else None
     repo = remote or str(Path(source).resolve())
     run_id = run_id or store.start(repo, ref or '')
+    store.set_run_settings(run_id, pins, timeout)
     sha = ''
     try:
         with tempfile.TemporaryDirectory(prefix='sentinel-repo-') as temp:

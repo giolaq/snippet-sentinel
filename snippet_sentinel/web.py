@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -9,6 +9,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .classifier import BROKEN, INCONCLUSIVE
 from .scan import github_url, scan
 from .storage import Store
+from .fixer import fix_run
+from .github import open_fix_pr
 
 templates = Environment(loader=FileSystemLoader(Path(__file__).parent / 'templates'), autoescape=select_autoescape())
 templates.filters['urlpath'] = lambda value: quote(value, safe='/')
@@ -68,6 +70,21 @@ def render_run(run, static=False, status=''):
     return templates.get_template('run.html').render(run=run, static=static, status=status)
 
 
+def require_same_origin(request):
+    source = request.headers.get('origin', request.headers.get('referer'))
+    if source is None:
+        return
+    try:
+        parsed = urlsplit(source)
+        target = urlsplit(str(request.url))
+        def origin(url):
+            return url.scheme.lower(), url.hostname, url.port or (443 if url.scheme == 'https' else 80)
+        if parsed.scheme not in {'http', 'https'} or origin(parsed) != origin(target):
+            raise ValueError('Origin mismatch')
+    except ValueError:
+        raise HTTPException(403, 'Cross-origin POST requests are not allowed') from None
+
+
 def create_app(db='sentinel.db'):
     app = FastAPI(title='Snippet Sentinel')
     store = Store(db)
@@ -104,6 +121,31 @@ def create_app(db='sentinel.db'):
         run = store.get(run_id)
         if run is None:
             raise HTTPException(404, 'Run not found')
+        run['fix_job'] = store.fix_job(run_id)
         return render_run(run, status=status)
+
+    @app.post('/runs/{run_id}/fix')
+    def propose(run_id: int, request: Request, background: BackgroundTasks):
+        require_same_origin(request)
+        run = store.get(run_id)
+        if not run:
+            raise HTTPException(404, 'Run not found')
+        if not run['repo'].startswith('https://github.com/') or not run['finished'] or run['error']:
+            raise HTTPException(400, 'A completed GitHub scan is required')
+        if not any(r['status'] in BROKEN for r in run['results']):
+            raise HTTPException(400, 'No broken snippets')
+        if store.ensure_fix_job(run_id):
+            background.add_task(fix_run, run_id, db)
+        return RedirectResponse(f'/runs/{run_id}', status_code=303)
+
+    @app.post('/runs/{run_id}/fix/pr')
+    def open_pr(run_id: int, request: Request, background: BackgroundTasks):
+        require_same_origin(request)
+        job = store.fix_job(run_id)
+        if not job:
+            raise HTTPException(400, 'No verified fixes available; propose fixes first')
+        if not job['pr_url'] and store.claim_fix_pr(run_id):
+            background.add_task(open_fix_pr, run_id, db, claimed=True)
+        return RedirectResponse(f'/runs/{run_id}', status_code=303)
 
     return app

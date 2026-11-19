@@ -31,7 +31,27 @@ def main():
     server.add_argument('--port', type=positive, default=8000)
     server.add_argument('--db', default='sentinel.db')
     server.add_argument('--host', default='127.0.0.1')
+    fixer = commands.add_parser('fix')
+    fixer.add_argument('run_id', type=int)
+    fixer.add_argument('--db', default='sentinel.db')
+    fixer.add_argument('--open-pr', action='store_true')
     args = parser.parse_args()
+    if args.command == 'fix':
+        from .fixer import fix_run
+        from .github import open_fix_pr
+        try:
+            job = fix_run(args.run_id, args.db)
+            if args.open_pr:
+                job = open_fix_pr(args.run_id, args.db)
+        except Exception as exc:
+            parser.exit(1, f'Fix failed: {exc}\n')
+        for fix in job['results']:
+            print(f"{fix['file']}:{fix['line']} | verified={fix['verified']} | {fix['proposer'] or 'no proposal'} | {fix['output']}")
+        if job['pr_url']:
+            print(job['pr_url'])
+        if job['error']:
+            parser.exit(1, f"Fix failed: {job['error']}\n")
+        return
     if args.command == 'serve':
         import uvicorn
         uvicorn.run(create_app(args.db), host=args.host, port=args.port)
