@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import symtable
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -14,6 +15,7 @@ LANGS = {**dict.fromkeys(('js', 'javascript', 'jsx', 'mjs', 'cjs', 'node'), 'jav
 SKIP_DIRS = {'.git', 'node_modules', 'vendor'}
 OPT_OUT = re.compile(r"""(?<!\S)(?:skip|norun|no-run)(?!\S)|(?:^|[\s{])(?:test|run)\s*=\s*(?:"skip"|'skip'|skip(?=[\s}]|$))""", re.I)
 SHELL_LINE = re.compile(r'^\s*(?:\$\s+\S|!?(?:pip3?|python3?\s+-m\s+pip)\s+(?:install|uninstall|show|freeze|list)\b|export\s+[A-Za-z_]\w*=)')
+INLINE_API = re.compile(r'`([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)+)`')
 
 
 @dataclass
@@ -26,10 +28,11 @@ class Snippet:
     reason: str = ''
     context_names: tuple[str, ...] = ()
     expected_error: str = ''
+    illustrative_names: tuple[str, ...] = ()
 
     def dict(self):
         data = asdict(self)
-        del data['context_names'], data['expected_error']
+        del data['context_names'], data['expected_error'], data['illustrative_names']
         return data
 
 
@@ -40,6 +43,16 @@ def python_scope(code, transcript):
         return symtable.symtable(code, '<snippet>', 'exec')
     except (SyntaxError, ValueError):
         return None
+
+
+def documented_inputs(tree, prose, free_names, earlier_setup):
+    references = set(INLINE_API.findall(' '.join(prose)))
+    names = set()
+    if earlier_setup and references:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and ast.unparse(node.func) in references:
+                names.update(arg.id for arg in node.args if isinstance(arg, ast.Name) and arg.id in free_names)
+    return names
 
 
 def expected_error(lines, end):
@@ -71,10 +84,19 @@ def extract(root):
                 continue
             lines = path.read_text(errors='replace').splitlines()
             python_bindings = set()
+            examples = []
+            prose = deque(maxlen=8)
+            file_references = set()
             i = 0
             while i < len(lines):
                 fence = re.match(r'^\s*(`{3,}|~{3,})(.*)$', lines[i])
                 if not fence:
+                    line = lines[i].strip()
+                    file_references.update(INLINE_API.findall(line))
+                    if re.match(r'^#{1,6}\s', line):
+                        prose.clear()
+                    elif line:
+                        prose.append(line)
                     i += 1
                     continue
                 marker, info = fence.groups()
@@ -104,10 +126,12 @@ def extract(root):
                 ) and any(SHELL_LINE.match(line) for line in body)
                 scope = python_scope(code, transcript) if lang == 'python' and not shell else None
                 context_names = ()
+                free_names = set()
                 if scope and not transcript:
-                    context_names = tuple(sorted(symbol.get_name() for symbol in scope.get_symbols()
-                                                 if symbol.get_name() in python_bindings and symbol.is_referenced()
-                                                 and not symbol.is_assigned() and not symbol.is_imported()))
+                    free_names = {symbol.get_name() for symbol in scope.get_symbols()
+                                  if symbol.is_referenced() and not symbol.is_assigned() and not symbol.is_imported()
+                                  and not symbol.is_namespace()}
+                    context_names = tuple(sorted(free_names & python_bindings))
                 reason = ''
                 if OPT_OUT.search(info.strip()[len(raw_lang):]):
                     reason = 'info-string opt-out'
@@ -128,6 +152,20 @@ def extract(root):
                                            if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace())
                 relative = path.relative_to(root).as_posix()
                 identity = hashlib.sha256((relative + '\0' + lang + '\0' + code).encode()).hexdigest()[:24]
-                snippets.append(Snippet(identity, relative, start + 2, lang, code, reason,
-                                        context_names, expected_error(lines, i)))
+                snippet = Snippet(identity, relative, start + 2, lang, code, reason,
+                                  context_names, expected_error(lines, i))
+                snippets.append(snippet)
+                if free_names and not reason:
+                    tree = ast.parse(code)
+                    names = documented_inputs(tree, prose, free_names, context_names)
+                    if len(tree.body) == 1:
+                        references = {f'{node.value.id}.{node.attr}' for node in ast.walk(tree)
+                                      if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                                      and node.value.id in free_names}
+                        examples.append((snippet, free_names, names, references))
+                    elif names:
+                        snippet.illustrative_names = tuple(sorted(names))
+            for snippet, free_names, names, references in examples:
+                documented = {ref.split('.')[0] for ref in references & file_references}
+                snippet.illustrative_names = tuple(sorted(names | documented | (free_names & python_bindings)))
     return snippets, stats

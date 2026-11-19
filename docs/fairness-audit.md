@@ -1,13 +1,15 @@
 # Snippet verdict fairness audit
 
-**34 of 54 sampled verdicts disagreed with manual review on v1; 12 of 54 disagreed after the fixes.** False “broken” calls fell from 32 to 12; the other two errors in v1 were runnable snippets incorrectly skipped for a lint-only opt-out.
+**Using the final manual judgments, wrong verdicts fell from 32 of 54 on v1 to 10 after PR #4 and 0 in the follow-up.** False “broken” calls fell from 30 to 10 to 0. The other two v1 errors were runnable snippets incorrectly skipped for a lint-only opt-out.
 
-| SDK | Reviewed | Wrong before | Wrong after |
-| --- | ---: | ---: | ---: |
-| openai-python | 23 | 18 | 2 |
-| httpx | 18 | 14 | 10 |
-| pydantic | 13 | 2 | 0 |
-| **Total** | 54 | 34 | 12 |
+| SDK | Reviewed | Wrong on v1 | Wrong after PR #4 | Wrong in follow-up |
+| --- | ---: | ---: | ---: | ---: |
+| openai-python | 23 | 18 | 2 | 0 |
+| httpx | 18 | 12 | 8 | 0 |
+| pydantic | 13 | 2 | 0 | 0 |
+| **Total** | **54** | **32** | **10** | **0** |
+
+PR #4 reported 34 and 12 disagreements under the original labels. The follow-up determined that two HTTPX examples really do fail as written, so their existing `runtime_error` verdicts count as correct at all three stages. Under the unchanged original labels, the follow-up would count 2 disagreements.
 
 ## Method and decisions
 
@@ -15,10 +17,19 @@
 - Hand-labeled 54 of the baseline broken, skipped, and credential-blocked snippets by reading the source and surrounding prose, then replayed the same snippet IDs in the same environment. This is a targeted error review, not a random sample or a leaderboard score.
 - Both sides used the same configured pin `openai[aiohttp]==3.55.1` for the two examples with documented aiohttp setup. V1 ignored the extras pin and failed before credential lookup; the fixed runner installs it and reaches the credential check. Other examples used registry resolution (observed SDK releases: OpenAI 3.55.1, HTTPX 0.28.1, Pydantic 2.14.3).
 - Credential and fragment decisions now depend on the terminal exception and specific evidence, not traceback source text or an arbitrary undefined name. Pydantic's explicit negative-example opt-outs are still honored. Regression fixtures cover shell-only Python fences and intentional errors with a matching exception in the adjacent output fence; neither new pattern contributed to the measured improvement.
-- The remaining 12 disagreements include fragments with no earlier binding, an illustrative dependency, a placeholder path, and sandbox DNS failures for an external demo host. These still need review before publication. A blanket rule for those errors could hide genuine broken examples. “Not evaluated” is also now distinct from a measured 0% for an empty, failed, or incomplete run.
+- The follow-up replayed all 54 original snippet IDs in Docker with the same source revisions, pin overrides, and 60-second timeout. It was based on `main` at `1dcfe45`; sandbox hardening (PR #6) and TypeScript/JSX support (PR #7) had not merged. All 42 examples that agreed with the original review after PR #4 retained their verdicts. “Not evaluated” is distinct from a measured 0% for an empty, failed, or incomplete run.
+
+## Follow-up on the 12 flagged examples
+
+| Sources | PR #4 → follow-up | Judgment |
+| --- | --- | --- |
+| OpenAI `README.md:582`; HTTPX `compatibility.md:19,25,33,39`, `authentication.md:99,112`, `clients.md:151` | `runtime_error` → `skipped` | Eight partial examples. A missing name is backed by setup elsewhere in the file, an exact API reference in the prose, or a documented call taking caller-supplied input in a fragment that already has earlier setup. Unexplained missing names and removed APIs still fail. |
+| OpenAI `httpx2.md:60` | `runtime_error` → `skipped` | The CA bundle path at the failing call is literally `/path/to/ca-bundle.pem`; the reader must replace it. |
+| HTTPX `authentication.md:220` | `missing_dependency` → `skipped` | The unavailable import is the same illustrative helper invoked with an explicit `...` argument. An unavailable dependency without that evidence, or a failed version pin, still fails. |
+| HTTPX [`clients.md:188`](https://github.com/encode/httpx/blob/7cff5f79bc78649bbcd3fd9aa7a74c86e0f63016/docs/advanced/clients.md?plain=1#L188) and [`clients.md:211`](https://github.com/encode/httpx/blob/7cff5f79bc78649bbcd3fd9aa7a74c86e0f63016/docs/advanced/clients.md?plain=1#L211) | `runtime_error` → `runtime_error` | Both progress-bar examples depend on `speed.hetzner.de/100MB.bin`. The network-enabled Docker replay failed DNS resolution; Google Public DNS and Cloudflare also returned no A or AAAA records, and a request outside Docker could not resolve the host. These are broken demo URLs at the time of review, not HTTPX API failures or evidence of network isolation. |
 
 <details>
-<summary>Line-by-line judgments and measured results</summary>
+<summary>Original v1 and PR #4 judgments and measured results (before follow-up re-adjudication)</summary>
 
 ### openai/openai-python
 
