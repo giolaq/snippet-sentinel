@@ -73,6 +73,24 @@ def test_cli_network_opt_in(monkeypatch, tmp_path):
     assert [c['allow_network'] for c in calls] == [False, True]
 
 
+@pytest.mark.parametrize('allow_network', [False, True])
+def test_scan_network_option_dispatch(monkeypatch, tmp_path, allow_network):
+    from snippet_sentinel.scan import scan
+
+    (tmp_path / 'a.md').write_text('```python\nprint(1)\n```\n')
+    calls = []
+
+    def fake_run(snippet, backend, timeout, pins, *network):
+        calls.append(network)
+        return {**snippet.dict(), 'runner': backend, 'versions': {}, 'status': 'pass'}
+
+    monkeypatch.setattr('snippet_sentinel.scan.cleanup_stale', lambda: None)
+    monkeypatch.setattr('snippet_sentinel.scan.run', fake_run)
+    result = scan(str(tmp_path), db=tmp_path / 'scan.db', allow_network=allow_network)
+    assert result['counts'] == {'pass': 1}
+    assert calls == [(True,) if allow_network else ()]
+
+
 def test_docker_isolation_failure_is_closed(monkeypatch):
     calls = []
 
