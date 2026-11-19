@@ -54,20 +54,24 @@ def dependencies(code, lang):
 
 
 def javascript_mode(code):
+    # Type-only imports and `import x = require()` are erased or compiled to CommonJS by esbuild.
+    code = re.sub(r'/\*.*?\*/|^\s*//[^\n]*|^\s*import\s+type\b[^\n]*|\bimport\s+[\w$]+\s*=\s*(?=require\s*\()', '',
+                  code, flags=re.S | re.M)
     esm = re.search(r'''\b(?:import(?=\s|[{'"*])|export(?=\s|[{*]))''', code)
     commonjs = re.search(r'\brequire\s*\(|\bmodule\s*\.\s*exports\b|\bexports\s*\.|\b__(?:dirname|filename)\b', code)
     return bool(esm) or not commonjs
 
 
 TSX = 'tsx@4.23.15'
-JSX = re.compile(r'</[A-Za-z][\w.]*\s*>|<[A-Za-z][\w.]*(?:\s[^<>]*)?/>')
+JSX = re.compile(r'</(?:[A-Za-z][\w.]*)?\s*>|<[A-Za-z][\w.]*(?:\s[^<]*?)?/>|<>')
+STRINGS = re.compile(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1''', re.S)
 
 
 def script_name(code, lang):
     """TypeScript, and JavaScript containing JSX, run through tsx (esbuild); the rest runs on plain node."""
     if lang == 'python':
         return 'snippet.py'
-    jsx = bool(JSX.search(code))
+    jsx = bool(JSX.search(STRINGS.sub('""', code)))
     if lang == 'typescript':
         return 'snippet.tsx' if jsx else 'snippet.ts'
     if jsx:

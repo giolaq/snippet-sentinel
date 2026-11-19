@@ -95,6 +95,9 @@ def test_javascript_module_mode(code, esm):
     ('typescript', "enum Color { Red }\ninterface P { c: Color }\nconst p: P = { c: Color.Red };\nawait Promise.resolve(p);", 'pass'),
     ('typescript', "import { strict as assert } from 'node:assert';\nimport type { Stats } from 'node:fs';\nimport { Dirent } from 'node:fs';\nlet d: Dirent | undefined;\nassert.equal(d, undefined);", 'pass'),
     ('typescript', "const fs = require('node:fs');\nconst n: number = fs.constants.F_OK;", 'pass'),
+    ('typescript', "import type { Stats } from 'node:fs';\nconst fs = require('node:fs');\nlet s: Stats | undefined;", 'pass'),
+    ('typescript', "import fs = require('node:fs');\nconst n: number = fs.constants.F_OK;", 'pass'),
+    ('typescript', "const fs = require('node:fs');\nconst n: number = await Promise.resolve(fs.constants.F_OK);", 'pass'),
     ('typescript', "const value: number = ;", 'syntax_error'),
     ('typescript', "const p = (x: number) => x;\np(1).toFixed(2).missing();", 'runtime_error'),
     ('javascript', "const React = { createElement: () => ({}) };\nconsole.log(<b>hi</b>, <br />);", 'pass'),
@@ -112,6 +115,9 @@ def test_typescript_and_jsx_execution(lang, code, expected, runner):
     ("import x from 'y';\nconst el = <App />;", 'typescript', 'snippet.tsx'),
     ('const el = <p>hi</p>;', 'javascript', 'snippet.jsx'),
     ("const ok = 1 < 2 && 3 > 2;", 'javascript', 'snippet.mjs'),
+    ('const el = <><b>a</b></>;', 'typescript', 'snippet.tsx'),
+    ('const el = <Button onClick={() => go()} />;', 'javascript', 'snippet.jsx'),
+    ("const html = '<p>hi</p>';\nconst n = <number>JSON.parse('1');", 'typescript', 'snippet.ts'),
     ("import x from 'y';", 'javascript', 'snippet.mjs'),
 ])
 def test_script_name(code, lang, expected):
