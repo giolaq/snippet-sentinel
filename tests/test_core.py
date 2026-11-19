@@ -520,6 +520,8 @@ def test_docker_versions():
     ("messages: [{ role: 'user', content: '\u2026' }],\nrun(\u2026);", 'placeholder ellipsis'),
     ("const all = [...items, ...more];\nf(...args);", ''),
     ("const m = 'abc'.match(/(...)/);\nconst n = /[...]/.test('.');", ''),
+    ("const avg = sum(...) / count;", 'placeholder ellipsis'),
+    ("const el = <Email {...} />;", 'placeholder ellipsis'),
     ("console.log('Loading\u2026 ...)');", ''),
     ("const url = 'https://example.com'; // before and after", ''),
     ("client.chat.completions\n  .create({ model: 'x' });", ''),
