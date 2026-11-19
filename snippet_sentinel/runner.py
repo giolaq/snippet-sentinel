@@ -16,6 +16,52 @@ from .dependencies import TSX, dependencies, javascript_mode, pinned, python_pac
 
 QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
 ERROR_PATHS = re.compile(rf'({QUOTED_PATH})(?: -> ({QUOTED_PATH}))?')
+from .extractor import runnable_code
+
+
+# Runs a Python snippet as __main__, allowing top-level await like the asyncio REPL and notebooks.
+PYTHON_RUN = '''def _sentinel_main():
+    # Only modules Python loads at startup (sys, os) are imported, so the snippet sees a fresh interpreter.
+    import os, sys
+    filename = os.path.abspath(sys.argv[1])
+    source = open(filename).read()
+    coroutine = False
+    try:
+        code = compile(source, filename, 'exec')
+    except SyntaxError as error:
+        try:
+            code = compile(source, filename, 'exec', flags=0x2000)  # ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        except SyntaxError:
+            code = None
+        if code is None or not code.co_flags & 0x80:  # inspect.CO_COROUTINE
+            raise error from None
+        coroutine = True
+    namespace = sys.modules['__main__'].__dict__
+    builtins = namespace['__builtins__']
+    namespace.clear()
+    namespace.update(__name__='__main__', __file__=filename, __builtins__=builtins)
+    sys.argv = [filename]
+    try:
+        if coroutine:
+            import asyncio
+            asyncio.run(eval(code, namespace))
+        else:
+            exec(code, namespace)
+    except NameError as error:
+        # Name a missing import: the name is a public export of an installed package.
+        for module_name, module in sorted(sys.modules.items()):
+            if '.' not in module_name and 'site-packages' in (getattr(module, '__file__', None) or ''):
+                try:
+                    if getattr(module, error.name, None) is not None:
+                        print('SENTINEL_EXPORTED_BY=' + module_name, file=sys.stderr, flush=True)
+                        break
+                except Exception:
+                    pass
+        raise
+
+
+_sentinel_main()
+'''
 
 
 class InfrastructureError(RuntimeError):
@@ -75,7 +121,7 @@ def documented_failure(snippet, status, output):
     if not error:
         return ''
     name, message = error['name'], error['message'] or ''
-    if name == snippet.expected_error:
+    if name == snippet.expected_error or mentions_error(snippet, name):
         return f'demonstrates {name} as documented'
     if snippet.lang != 'python':
         return javascript_placeholder(snippet.code, error[0])
@@ -106,7 +152,10 @@ def illustrative_dependency(snippet, output):
         r'^ERROR: No matching distribution found for ([\w.-]+)$', output, re.M)}
     if not unavailable:
         return ''
-    tree = ast.parse(snippet.code)
+    try:
+        tree = ast.parse(runnable_code(snippet))
+    except SyntaxError:
+        return ''
     imported = {alias.asname or alias.name.split('.')[0]: alias.name
                 for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
                 if re.sub(r'[-_.]+', '-', python_package(alias.name).lower()) in unavailable}
@@ -116,6 +165,20 @@ def illustrative_dependency(snippet, output):
             if alias in imported and any(isinstance(arg, ast.Constant) and arg.value is Ellipsis for arg in node.args):
                 return f'illustrative dependency with placeholder arguments: {imported[alias]}'
     return ''
+
+
+def mentions_error(snippet, name):
+    """The snippet itself says it fails: `# Raises ValueError` or the error in a transcript's expected output."""
+    if snippet.lang != 'python' or not name:
+        return False
+    transcript = runnable_code(snippet) != snippet.code
+    for line in snippet.code.splitlines():
+        line = line.strip()
+        if '#' in line and re.search(rf'\b{name}\b', line.split('#', 1)[1]):
+            return True
+        if transcript and not line.startswith(('>>>', '...')) and re.search(rf'\b{name}\b', line):
+            return True
+    return False
 
 
 def command(args, cwd, timeout, env=None):
@@ -139,17 +202,18 @@ def run(snippet, runner='docker', timeout=60, pins=()):
     result = {**snippet.dict(), 'runner': runner, 'versions': {}, 'stderr': '', 'exit_code': None}
     if snippet.reason:
         return {**result, 'status': 'skipped'}
-    packages = dependencies(snippet.code, snippet.lang)
+    code = runnable_code(snippet)
+    packages = dependencies(code, snippet.lang)
     specs = pinned(packages, pins, snippet.lang)
     python = snippet.lang == 'python'
-    esm = javascript_mode(snippet.code) if not python else False
-    filename = script_name(snippet.code, snippet.lang)
+    esm = javascript_mode(code) if not python else False
+    filename = script_name(code, snippet.lang)
     transpile = filename.endswith(('.ts', '.tsx', '.jsx'))
     name = 'sentinel-' + uuid.uuid4().hex
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='sentinel-') as directory:
         path = Path(directory)
-        path.joinpath(filename).write_text(snippet.code)
+        path.joinpath(filename).write_text(code)
         # A tiny worker keeps package discovery and execution identical across backends.
         worker = '''import json, subprocess, sys
 packages, specs, python, filename = json.loads(sys.argv[1])[:4]
@@ -168,9 +232,11 @@ else:
     data = json.loads(p.stdout or '{}')
     versions = {k: v.get('version', '?') for k, v in data.get('dependencies', {}).items() if k in packages}
 print('SENTINEL_VERSIONS=' + json.dumps(versions), flush=True)
-sys.exit(subprocess.call([sys.executable if python else 'node', filename]))
+sys.exit(subprocess.call([sys.executable, 'sentinel_run.py', filename] if python else ['node', filename]))
 '''
         path.joinpath('worker.py').write_text(worker)
+        if python:
+            path.joinpath('sentinel_run.py').write_text(PYTHON_RUN)
         payload = json.dumps([packages, specs, python, filename, transpile, esm])
         if not python:
             js_worker = '''const {spawnSync} = require('node:child_process');
@@ -257,9 +323,11 @@ process.exit(r.status === null ? 1 : r.status);
                         pass
                 else:
                     lines.append(line)
+            exported_by = next((line.split('=', 1)[1] for line in lines if line.startswith('SENTINEL_EXPORTED_BY=')), '')
+            lines = [line for line in lines if not line.startswith('SENTINEL_EXPORTED_BY=')]
             install_failed = 'SENTINEL_INSTALL_FAILED' in lines
             output = '\n'.join(lines)
-            status = classify(output, rc, expired, install_failed, snippet.code)
+            status = classify(output, rc, expired, install_failed, code)
             if install_failed:
                 reason = illustrative_dependency(snippet, output) if status == 'missing_dependency' else ''
             else:
@@ -267,7 +335,10 @@ process.exit(r.status === null ? 1 : r.status);
             if reason:
                 status = 'skipped'
             elif status == 'needs_context':
-                reason = context_reason(output, snippet.code)
+                reason = context_reason(output, code)
+            if exported_by and status == 'runtime_error' and (error := final_error(output)) and error['name'] == 'NameError':
+                missing = re.match(r"name '(\w+)'", error['message'] or '')
+                reason = f'`{missing[1] if missing else "name"}` is exported by `{exported_by}` but the snippet never imports it.'
             result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
         except OSError as exc:
             if runner == 'docker':
