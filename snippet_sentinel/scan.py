@@ -3,7 +3,8 @@ import re
 import subprocess
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from itertools import islice
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -101,13 +102,26 @@ def scan(source, db='sentinel.db', ref=None, lang=None, runner='docker', jobs=4,
             progress(f'0/{total} done')
             results = [None] * total
             last_progress = time.monotonic()
-            with ThreadPoolExecutor(max_workers=jobs) as pool:
-                futures = {pool.submit(run, s, runner, timeout, pins): i for i, s in enumerate(snippets)}
-                for done, future in enumerate(as_completed(futures), 1):
-                    results[futures[future]] = future.result()
-                    if done in (1, total) or time.monotonic() - last_progress >= 1:
-                        progress(f'{done}/{total} done')
-                        last_progress = time.monotonic()
+            pool = ThreadPoolExecutor(max_workers=jobs)
+            remaining = iter(enumerate(snippets))
+            try:
+                futures = {pool.submit(run, s, runner, timeout, pins): i for i, s in islice(remaining, jobs)}
+                done = 0
+                while futures:
+                    ready, _ = wait(futures, return_when=FIRST_COMPLETED)
+                    for future in ready:
+                        results[futures.pop(future)] = future.result()
+                        done += 1
+                        if done in (1, total) or time.monotonic() - last_progress >= 1:
+                            progress(f'{done}/{total} done')
+                            last_progress = time.monotonic()
+                    for i, s in islice(remaining, len(ready)):
+                        futures[pool.submit(run, s, runner, timeout, pins)] = i
+            except BaseException:
+                pool.shutdown(wait=False, cancel_futures=True)
+                raise
+            else:
+                pool.shutdown(wait=True)
             store.finish(run_id, results, stats, sha)
     except Exception as exc:
         store.finish(run_id, [], {}, sha, str(exc))

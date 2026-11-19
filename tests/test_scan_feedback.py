@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from snippet_sentinel.cli import main
 from snippet_sentinel.extractor import Snippet
+from snippet_sentinel.runner import InfrastructureError
 from snippet_sentinel.scan import git_error, redact_git_error, scan
 from snippet_sentinel.storage import Store
 from snippet_sentinel.web import create_app, render_run
@@ -244,3 +245,55 @@ def test_docker_failure_guidance_cli_and_dashboard(tmp_path, monkeypatch, capsys
     assert stored.startswith(guidance + '\n')
     page = unescape(TestClient(create_app(db)).get('/runs/1').text)
     assert guidance in page and 'Cannot connect to the Docker daemon' in page
+
+
+def test_infrastructure_failure_stops_scheduling_and_does_not_wait(tmp_path, monkeypatch):
+    (tmp_path / 'a.md').write_text(''.join(f'```python\n{i}\n```\n' for i in range(500)))
+    calls = []
+    blocked = threading.Event()
+    release = threading.Event()
+    surfaced = threading.Event()
+    errors = []
+
+    def fake_run(snippet, *args):
+        calls.append(snippet.code)
+        if snippet.code == '0':
+            assert blocked.wait(5)
+            raise InfrastructureError('Docker daemon unavailable')
+        blocked.set()
+        assert release.wait(5)
+        return passed(snippet)
+
+    def work():
+        try:
+            scan(str(tmp_path), db=tmp_path / 'scan.db', jobs=2)
+        except Exception as error:
+            errors.append(error)
+        finally:
+            surfaced.set()
+
+    monkeypatch.setattr('snippet_sentinel.scan.run', fake_run)
+    thread = threading.Thread(target=work)
+    thread.start()
+    try:
+        assert surfaced.wait(3), 'scan waited for another running snippet before reporting infrastructure failure'
+        assert len(calls) == 2
+        assert len(errors) == 1 and isinstance(errors[0], InfrastructureError)
+        assert 'Docker daemon unavailable' in Store(tmp_path / 'scan.db').get(1)['error']
+    finally:
+        release.set()
+        thread.join(5)
+
+
+def test_immediate_infrastructure_failure_starts_few_runners(tmp_path, monkeypatch):
+    (tmp_path / 'a.md').write_text(''.join(f'```python\n{i}\n```\n' for i in range(500)))
+    calls = []
+
+    def fail(snippet, *args):
+        calls.append(snippet.id)
+        raise InfrastructureError('Docker daemon unavailable')
+
+    monkeypatch.setattr('snippet_sentinel.scan.run', fail)
+    with pytest.raises(InfrastructureError):
+        scan(str(tmp_path), db=tmp_path / 'scan.db', jobs=4)
+    assert len(calls) <= 4
