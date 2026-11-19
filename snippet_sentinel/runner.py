@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 from .classifier import classify
-from .dependencies import dependencies, is_esm, pinned
+from .dependencies import dependencies, javascript_mode, pinned
 
 
 def command(args, cwd, timeout, env=None):
@@ -37,12 +37,16 @@ def run(snippet, runner='docker', timeout=60, pins=()):
     packages = dependencies(snippet.code, snippet.lang)
     specs = pinned(packages, pins, snippet.lang)
     python = snippet.lang == 'python'
-    filename = 'snippet.py' if python else ('snippet.mjs' if is_esm(snippet.code) else 'snippet.cjs')
+    esm, wrap = javascript_mode(snippet.code) if not python else (False, False)
+    filename = 'snippet.py' if python else ('snippet.mjs' if esm else 'snippet.cjs')
     name = 'sentinel-' + uuid.uuid4().hex
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='sentinel-') as directory:
         path = Path(directory)
-        path.joinpath(filename).write_text(snippet.code)
+        code = snippet.code
+        if wrap:
+            code = '(async () => {\n' + code + '\n})().catch(error => { console.error(error); process.exitCode = 1; });\n'
+        path.joinpath(filename).write_text(code)
         # A tiny worker keeps package discovery and execution identical across backends.
         worker = '''import json, subprocess, sys
 packages, specs, python, filename = json.loads(sys.argv[1])

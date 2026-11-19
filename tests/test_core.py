@@ -43,6 +43,31 @@ def test_pins_and_esm():
     assert not is_esm("const fs = require('fs')")
 
 
+@pytest.mark.parametrize('code,esm', [
+    ("const fs = require('node:fs'); async function main() { await Promise.resolve(); } main();", False),
+    ("const fs = require('node:fs'); const main = async () => { await Promise.resolve(); }; main();", False),
+    ("const main = async () => await Promise.resolve(); main();", False),
+    ("const fs = require('node:fs'); await Promise.resolve();", False),
+    ("if (true) { await Promise.resolve(); }", True),
+    ("// import x from 'x'\nconsole.log('await import export');", False),
+    ("import('node:fs').then(() => {});", False),
+    ("import fs from 'node:fs'; await Promise.resolve();", True),
+    ('', False),
+])
+def test_javascript_module_mode(code, esm):
+    assert is_esm(code) is esm
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='Local Node required')
+@pytest.mark.parametrize('code,expected', [
+    ("const fs = require('node:fs'); async function main() { await Promise.resolve(); } main();", 'pass'),
+    ("const fs = require('node:fs'); await Promise.resolve();", 'pass'),
+    ("const fs = require('node:fs'); await Promise.reject(new Error('broken'));", 'runtime_error'),
+])
+def test_async_commonjs_execution(code, expected):
+    assert run(Snippet('js', 'a.md', 1, 'javascript', code), 'local')['status'] == expected
+
+
 @pytest.mark.parametrize('message,code,expected', [('', 0, 'pass'), ('SyntaxError: x', 1, 'syntax_error'),
     ('Cannot find module x', 1, 'missing_dependency'), ('401 Unauthorized', 1, 'needs_credentials'),
     ("KeyError: 'API_KEY'", 1, 'needs_credentials'), ('process.env.API_KEY undefined', 1, 'needs_credentials'),

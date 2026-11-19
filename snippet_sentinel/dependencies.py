@@ -35,8 +35,51 @@ def dependencies(code, lang):
     return sorted(packages)
 
 
+def javascript_mode(code):
+    clean = re.sub(r'''//[^\n]*|/\*[\s\S]*?\*/|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`''', ' ', code)
+    tokens = re.findall(r'\w+|=>|[^\s]', clean)
+    scopes, parens = [], []
+    pending_function = False
+    arrow_expression = None
+    esm = requires = top_await = False
+    for i, token in enumerate(tokens):
+        previous = tokens[i - 1] if i else ''
+        following = tokens[i + 1] if i + 1 < len(tokens) else ''
+        if token == 'import' and following not in {'(', ':'} and previous != '.':
+            esm = True
+        if token == 'export' and previous != '.' and following != ':':
+            esm = True
+        if token == 'require' and following == '(' and previous != '.':
+            requires = True
+        if token == 'function':
+            pending_function = True
+        if token == '(':
+            parens.append(i)
+        if token == '{':
+            method = False
+            if previous == ')' and parens:
+                opening = parens[-1]
+                before = tokens[opening - 1] if opening else ''
+                method = before not in {'if', 'for', 'while', 'switch', 'catch', 'with'}
+            scopes.append(pending_function or previous == '=>' or method)
+            pending_function = False
+        elif token == '}':
+            if scopes:
+                scopes.pop()
+        if token == '=>' and following != '{':
+            arrow_expression = (len(scopes), len(parens))
+        if token in {';', ',', ')', '}'} and arrow_expression and (len(scopes), len(parens)) <= arrow_expression:
+            arrow_expression = None
+        if token == 'await' and previous != '.' and not any(scopes) and arrow_expression is None:
+            top_await = True
+        # Retain a just-closed parameter list until its following opening brace.
+        if previous == ')' and parens:
+            parens.pop()
+    return esm or (top_await and not requires), top_await and requires and not esm
+
+
 def is_esm(code):
-    return bool(re.search(r'\b(?:import|export)\s|\bimport\s*\(|\bawait\b', code))
+    return javascript_mode(code)[0]
 
 
 def pinned(packages, pins, lang):
