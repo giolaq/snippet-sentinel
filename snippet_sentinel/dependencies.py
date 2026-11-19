@@ -54,9 +54,29 @@ def dependencies(code, lang):
 
 
 def javascript_mode(code):
+    # Type-only imports and `import x = require()` are erased or compiled to CommonJS by esbuild.
+    code = re.sub(r'/\*.*?\*/|^\s*//[^\n]*|^\s*import\s+type\b[^\n]*|\bimport\s+[\w$]+\s*=\s*(?=require\s*\()', '',
+                  code, flags=re.S | re.M)
     esm = re.search(r'''\b(?:import(?=\s|[{'"*])|export(?=\s|[{*]))''', code)
     commonjs = re.search(r'\brequire\s*\(|\bmodule\s*\.\s*exports\b|\bexports\s*\.|\b__(?:dirname|filename)\b', code)
     return bool(esm) or not commonjs
+
+
+TSX = 'tsx@4.23.15'
+JSX = re.compile(r'</(?:[A-Za-z][\w.]*)?\s*>|<[A-Za-z][\w.]*(?:\s[^<]*?)?/>|<>')
+STRINGS = re.compile(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1''', re.S)
+
+
+def script_name(code, lang):
+    """TypeScript, and JavaScript containing JSX, run through tsx (esbuild); the rest runs on plain node."""
+    if lang == 'python':
+        return 'snippet.py'
+    jsx = bool(JSX.search(STRINGS.sub('""', code)))
+    if lang == 'typescript':
+        return 'snippet.tsx' if jsx else 'snippet.ts'
+    if jsx:
+        return 'snippet.jsx'
+    return 'snippet.mjs' if javascript_mode(code) else 'snippet.cjs'
 
 
 def is_esm(code):
@@ -68,6 +88,6 @@ def pinned(packages, pins, lang):
     for pin in pins:
         if lang == 'python' and (match := re.fullmatch(r'([\w.-]+)(?:\[[\w.-]+(?:,[\w.-]+)*\])?==[\w.+-]+', pin)):
             overrides[re.sub(r'[-_.]+', '-', match[1].lower())] = pin
-        elif lang == 'javascript' and re.fullmatch(r'(?:@[\w.-]+/)?[\w.-]+@[\w.^~+*-]+', pin):
+        elif lang != 'python' and re.fullmatch(r'(?:@[\w.-]+/)?[\w.-]+@[\w.^~+*-]+', pin):
             overrides[pin.rsplit('@', 1)[0]] = pin
     return [overrides.get(re.sub(r'[-_.]+', '-', p.lower()) if lang == 'python' else p, p) for p in packages]

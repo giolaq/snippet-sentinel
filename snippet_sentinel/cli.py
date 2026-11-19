@@ -19,7 +19,7 @@ def main():
     scanner = commands.add_parser('scan')
     scanner.add_argument('source')
     scanner.add_argument('--ref')
-    scanner.add_argument('--lang', choices=['python', 'javascript'])
+    scanner.add_argument('--lang', choices=['python', 'javascript', 'typescript'])
     scanner.add_argument('--runner', choices=['docker', 'local'], default='docker')
     scanner.add_argument('--jobs', type=positive, default=4)
     scanner.add_argument('--timeout', type=positive, default=60)
@@ -66,7 +66,6 @@ def main():
     print(f"{'STATUS':<24} COUNT")
     for status, count in sorted(result['counts'].items()):
         print(f'{status:<24} {count}')
-    print(f"unsupported (TypeScript) {result['stats'].get('unsupported', 0)}")
     if args.html:
         Path(args.html).write_text(render_run(result, static=True))
     if args.json:

@@ -11,6 +11,7 @@ from pathlib import Path
 from .classifier import final_error
 
 LANGS = {**dict.fromkeys(('js', 'javascript', 'jsx', 'mjs', 'cjs', 'node'), 'javascript'),
+         **dict.fromkeys(('ts', 'typescript', 'tsx', 'mts', 'cts'), 'typescript'),
          **dict.fromkeys(('py', 'python', 'python3', 'pycon'), 'python')}
 SKIP_DIRS = {'.git', 'node_modules', 'vendor'}
 OPT_OUT = re.compile(r"""(?<!\S)(?:skip|norun|no-run)(?!\S)|(?:^|[\s{])(?:test|run)\s*=\s*(?:"skip"|'skip'|skip(?=[\s}]|$))""", re.I)
@@ -114,8 +115,6 @@ def extract(root):
                 raw_lang = info.strip().split()[0].lower() if info.strip() else ''
                 lang = LANGS.get(raw_lang)
                 if not lang:
-                    if raw_lang in {'ts', 'typescript', 'tsx'}:
-                        stats['unsupported'] += 1
                     continue
                 code = '\n'.join(body)
                 first_content = next((line.strip() for line in body
