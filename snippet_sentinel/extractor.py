@@ -95,20 +95,22 @@ def javascript_fragment(code):
 
 def repl_source(code):
     """Turn a `>>>` transcript into a script: prompts become code, expected output is dropped."""
-    lines, statement = [], None
+    lines, statement, prompted = [], None, False
     for line in code.splitlines():
         stripped = line.lstrip()
         if stripped.startswith('>>>'):
+            prompted = False
             statement = [stripped[4:] if stripped.startswith('>>> ') else stripped[3:]]
             lines.append(statement[0])
         elif statement and stripped == '...':
             lines.append('')
             statement = None
         elif statement and stripped.startswith('... '):
+            prompted = True
             statement.append(stripped[4:])
             lines.append(stripped[4:])
-        elif statement and (incomplete('\n'.join(statement))
-                            or (line[:1].isspace() and statement[0].split('#')[0].rstrip().endswith(':'))):
+        elif statement and (incomplete('\n'.join(statement)) or not prompted and line[:1].isspace()
+                            and statement[0].split('#')[0].rstrip().endswith(':')):
             statement.append(line)
             lines.append(line)
         else:

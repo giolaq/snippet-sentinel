@@ -191,7 +191,7 @@ READER_INPUT = re.compile(r"Provided path: '([^']+)' is not a (?:file|directory)
                           r"|No such file or directory: '((?:\./)?path/to/[^']+)'")
 
 
-def python_inconclusive(code, status, output):
+def python_inconclusive(code, status, output, exit_code=None):
     """(status, reason) for a Python failure that says nothing about the docs: the reader's files, IDs, extras or server."""
     if status == 'timeout':
         if re.search(r'Waiting for authorization|Enter your token|token \(input will not be visible\)', output):
@@ -203,11 +203,13 @@ def python_inconclusive(code, status, output):
         return 'needs_context', 'Inspects the reader\'s local Hub cache, which is empty in a fresh sandbox.'
     error = final_error(output)
     if not error:
+        if status == 'runtime_error' and not output.strip() and exit_code is not None and (exit_code < 0 or exit_code >= 128):
+            return 'skipped', 'Killed without output, likely by the sandbox memory limit; not evaluated.'
         return None
     name, message = error['name'], error['message'] or ''
     frames = re.findall(r'^  File "([^"\n]+)", line \d+, in ', output[:error.start()], re.M)
     if (name.endswith('MissingDependencyError') or name in {'ImportError', 'ModuleNotFoundError'}
-            and re.search(r'pip install|to be installed|install it\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
+            and re.search(r'pip install|to be installed|install it\b|Use pip\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
         return 'needs_context', f'The SDK needs an optional dependency the docs ask readers to install: {message[:120]}'
     if path := READER_INPUT.search(message):
         return 'needs_context', f'Needs a local file or directory the reader provides: {next(filter(None, path.groups()))}'
@@ -240,7 +242,7 @@ def reader_value(code, missing):
     structural |= {id(node.value) for node in ast.walk(tree) if isinstance(node, (ast.Attribute, ast.Subscript))}
     structural |= {id(node.returns) for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     structural |= {id(node.annotation) for node in ast.walk(tree) if isinstance(node, (ast.arg, ast.AnnAssign))}
-    if any(id(node) in structural for node in uses):
+    if any(id(node) in structural for node in uses) and not re.match(r'(?:My|Your)[A-Z][a-z]\w*$', missing):
         return None
     bound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)}
     bound |= {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
@@ -409,7 +411,9 @@ process.exit(r.status === null ? 1 : r.status);
             if exported_by and reason.startswith('requires example setup'):
                 reason = ''
             inconclusive = (python and not reason and not exported_by and status in BROKEN
-                            and python_inconclusive(code, status, output))
+                            and python_inconclusive(code, status, output, rc))
+            if python and expired and specs and 'SENTINEL_VERSIONS=' not in out and len(out.encode()) < 15000:
+                inconclusive = 'skipped', 'Installing dependencies exceeded the time limit; not evaluated.'
             if inconclusive:
                 status, reason = inconclusive
             elif reason:
