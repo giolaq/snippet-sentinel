@@ -98,6 +98,7 @@ def test_javascript_module_mode(code, esm):
     ('typescript', "import type { Stats } from 'node:fs';\nconst fs = require('node:fs');\nlet s: Stats | undefined;", 'pass'),
     ('typescript', "import fs = require('node:fs');\nconst n: number = fs.constants.F_OK;", 'pass'),
     ('typescript', "const fs = require('node:fs');\nconst n: number = await Promise.resolve(fs.constants.F_OK);", 'pass'),
+    ('typescript', "const fs = require('node:fs');\nawait Promise.resolve();\nimport('node:path').then((path) => path.join(fs.constants.F_OK + ''));", 'pass'),
     ('typescript', "const value: number = ;", 'syntax_error'),
     ('typescript', "const p = (x: number) => x;\np(1).toFixed(2).missing();", 'runtime_error'),
     ('javascript', "const React = { createElement: () => ({}) };\nconsole.log(<b>hi</b>, <br />);", 'pass'),

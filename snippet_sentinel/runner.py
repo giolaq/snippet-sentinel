@@ -176,8 +176,8 @@ if (esm) {
  r = exec(filename, {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
  if (r.status !== 0 && /SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)|Top-level await is currently not supported with the "cjs" output format/.test(r.stderr || '')) {
   const lines = fs.readFileSync(filename, 'utf8').split('\\n');
-  const hoisted = lines.filter(line => /^\\s*import\\b/.test(line));
-  const body = lines.filter(line => !/^\\s*import\\b/.test(line));
+  const hoisted = lines.filter(line => /^\\s*import\\b(?!\\s*[(.])/.test(line));
+  const body = lines.filter(line => !/^\\s*import\\b(?!\\s*[(.])/.test(line));
   const wrapped = 'snippet-async' + filename.slice(filename.lastIndexOf('.'));
   fs.writeFileSync(wrapped, hoisted.join('\\n') + '\\n(async () => {\\n' + body.join('\\n') + '\\n})().catch(error => { console.error(error); process.exitCode = 1; });\\n');
   r = exec(wrapped, {stdio: 'inherit'});
