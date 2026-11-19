@@ -689,7 +689,7 @@ def test_python_missing_import_from_installed_package():
     ('snapshot_download("big")', 'timeout', 'Fetching 1004 files:   2%| 20/1004 [00:10<\nFetching 1004 files:   5%| 50/1004 [00:40<', 'skipped'),
     ('while True: pass', 'timeout', '', None),
     ('def f() -> MyModelClass: pass', 'runtime_error', "NameError: name 'MyModelClass' is not defined", 'needs_context'),
-    ('glob("**")', 'runtime_error', '', 'skipped'),
+    ('MySQLdb.connect()', 'runtime_error', "NameError: name 'MySQLdb' is not defined", None),
     ('print(result)\nresult = 1', 'runtime_error', "NameError: name 'result' is not defined", None),
     ('def f(client):\n    return send(x=clinet)\nf(1)', 'runtime_error', "NameError: name 'clinet' is not defined", None),
     ('scan_cache_dir()', 'runtime_error', 'huggingface_hub.errors.CacheNotFound: Cache directory not found: /root/.cache/huggingface/hub.', 'needs_context'),
@@ -725,3 +725,8 @@ def test_leaderboard_does_not_rank_tiny_denominators(tmp_path):
 def test_repl_output_after_prompted_block_is_not_code():
     code = '>>> async for t in f():\n...     print(t, end="")\n a platform for sharing.\n>>> x = 1'
     assert repl_source(code) == 'async for t in f():\n    print(t, end="")\nx = 1'
+
+
+def test_python_silent_exit_is_only_inconclusive_when_killed():
+    assert python_inconclusive('glob("**")', 'runtime_error', '', 137)[0] == 'skipped'
+    assert python_inconclusive('import sys; sys.exit(1)', 'runtime_error', '', 1) is None
