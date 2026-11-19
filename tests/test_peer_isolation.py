@@ -202,6 +202,38 @@ def test_only_initial_create_failure_is_infrastructure(monkeypatch, retry):
             run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
 
 
+@pytest.mark.parametrize('evidence,host,expected', [
+    ('SENTINEL_NETWORK_BLOCKED "api.github.com"\nTypeError: fetch failed', None, 'needs_network'),
+    ('SENTINEL_NETWORK_BLOCKED "dead.invalid"\nTypeError: fetch failed', 'dead.invalid', 'runtime_error'),
+    ('still running', None, 'timeout'),
+    ('SENTINEL_NETWORK_BLOCKED "example.com"\nTypeError: fetch failed', None, 'skipped'),
+    ('SENTINEL_NETWORK_BLOCKED "api.github.com"\nSENTINEL_OUTPUT_LIMIT: output limit exceeded', None, 'output_limit'),
+])
+def test_retry_timeout_uses_normal_classification_and_dns(monkeypatch, evidence, host, expected):
+    attempts, resolutions = 0, []
+
+    def fake_command(args, *unused):
+        nonlocal attempts
+        if 'worker.cjs' in args:
+            attempts += 1
+            if attempts == 1:
+                return 'earlier snippet output\nSENTINEL_VERSIONS={"sdk":"1"}\nSENTINEL_NEED_PEER=ws', 86, False
+            return evidence, -9, True
+        return '', 0, False
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *a, **kw: None)
+    monkeypatch.setattr('snippet_sentinel.runner.dead_host', lambda output: resolutions.append(output) or host)
+    code = "await fetch('https://example.com')" if expected == 'skipped' else 'console.log(1)'
+    result = run(Snippet('peer', 'a.md', 1, 'javascript', code))
+    assert result['status'] == expected, result
+    assert result['versions'] == {'sdk': '1'}
+    assert 'earlier snippet output' in result['stderr']
+    assert bool(resolutions) == (expected in {'needs_network', 'runtime_error'})
+    if host:
+        assert f'host {host} does not resolve' in result['stderr']
+
+
 def test_placeholder_precedes_dns_diagnostic(monkeypatch):
     def fake_command(args, *unused):
         if 'worker.cjs' in args:
@@ -266,6 +298,22 @@ console.log('optional peer loaded offline');
     assert result['versions']['ws']
     assert len(attempts) == (1 if allow_network else 2)
     assert any('ws' in args[args.index('--') + 1:] for args in installs) == (not allow_network)
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(not os.environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')
+def test_docker_retry_timeout_retains_blocked_network_evidence(monkeypatch):
+    monkeypatch.setattr('snippet_sentinel.runner.dead_host', lambda output: None)
+    code = """const fs=require('node:fs');
+fs.mkdirSync('node_modules/fixture-sdk',{recursive:true});
+fs.writeFileSync('node_modules/fixture-sdk/index.cjs','module.exports = require(' + JSON.stringify('ws') + ');');
+require('./node_modules/fixture-sdk/index.cjs');
+require('node:dns').lookup('api.github.com',()=>{});
+setInterval(()=>{},1000);
+"""
+    result = run(Snippet('retry-network', 'a.md', 1, 'javascript', code), timeout=25)
+    assert result['status'] == 'needs_network', result
+    assert 'SENTINEL_NETWORK_BLOCKED' in result['stderr']
 
 
 @pytest.mark.docker

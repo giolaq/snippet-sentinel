@@ -553,6 +553,49 @@ if (r.error) console.error(r.error);
 process.exit(r.status === null ? 1 : r.status);
 '''
             path.joinpath('worker.cjs').write_text(js_worker % TSX)
+        def finish(out, rc, expired):
+            lines = []
+            for line in out.splitlines():
+                if line.startswith('SENTINEL_VERSIONS='):
+                    try:
+                        result['versions'] = json.loads(line.split('=', 1)[1])
+                    except ValueError:
+                        pass
+                else:
+                    lines.append(line)
+            exported_by = next((line.split('=', 1)[1] for line in lines if line.startswith('SENTINEL_EXPORTED_BY=')), '')
+            lines = [line for line in lines if not line.startswith('SENTINEL_EXPORTED_BY=')]
+            install_failed = 'SENTINEL_INSTALL_FAILED' in lines
+            output = '\n'.join(lines)
+            status = classify(output, rc, expired, install_failed, code,
+                              network_disabled=runner == 'docker' and not allow_network)
+            reason = documented_failure(snippet, status, output) if not install_failed else ''
+            if status == 'needs_network' and not reason and runner == 'docker' and not allow_network:
+                host = dead_host(output)
+                if host:
+                    status = 'runtime_error'
+                    output += f'\nhost {host} does not resolve (dead URL in docs)'
+            if install_failed:
+                reason = illustrative_dependency(snippet, output) if status == 'missing_dependency' else ''
+            else:
+                reason = documented_failure(snippet, status, output)
+            if exported_by and reason.startswith('requires example setup'):
+                reason = ''
+            inconclusive = (python and not reason and not exported_by and status in BROKEN - {'output_limit', 'disk_limit'}
+                            and python_inconclusive(code, status, output, rc))
+            if python and expired and specs and 'SENTINEL_VERSIONS=' not in out and len(out.encode()) < 15000:
+                inconclusive = 'skipped', 'Installing dependencies exceeded the time limit; not evaluated.'
+            if inconclusive:
+                status, reason = inconclusive
+            elif reason:
+                status = 'skipped'
+            elif status == 'needs_context':
+                reason = context_reason(output, code)
+            if exported_by and status == 'runtime_error' and (error := final_error(output)) and error['name'] == 'NameError':
+                missing = re.match(r"name '(\w+)'", error['message'] or '')
+                reason = f'`{missing[1] if missing else "name"}` is exported by `{exported_by}` but the snippet never imports it.'
+            result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
+
         try:
             if runner == 'docker':
                 peers = []
@@ -640,51 +683,10 @@ process.exit(r.status === null ? 1 : r.status);
                     return {**result, 'status': 'runtime_error', 'stderr': 'Local JavaScript runner requires node and npm (UNSANDBOXED).'}
                 args = [executable, 'worker.py', payload] if python else ['node', 'worker.cjs', payload]
                 out, rc, expired = execute(args, directory, timeout - (time.monotonic() - started), env)
-            lines = []
-            for line in out.splitlines():
-                if line.startswith('SENTINEL_VERSIONS='):
-                    try:
-                        result['versions'] = json.loads(line.split('=', 1)[1])
-                    except ValueError:
-                        pass
-                else:
-                    lines.append(line)
-            exported_by = next((line.split('=', 1)[1] for line in lines if line.startswith('SENTINEL_EXPORTED_BY=')), '')
-            lines = [line for line in lines if not line.startswith('SENTINEL_EXPORTED_BY=')]
-            install_failed = 'SENTINEL_INSTALL_FAILED' in lines
-            output = '\n'.join(lines)
-            status = classify(output, rc, expired, install_failed, code,
-                              network_disabled=runner == 'docker' and not allow_network)
-            reason = documented_failure(snippet, status, output) if not install_failed else ''
-            if status == 'needs_network' and not reason and runner == 'docker' and not allow_network:
-                host = dead_host(output)
-                if host:
-                    status = 'runtime_error'
-                    output += f'\nhost {host} does not resolve (dead URL in docs)'
-            if install_failed:
-                reason = illustrative_dependency(snippet, output) if status == 'missing_dependency' else ''
-            else:
-                reason = documented_failure(snippet, status, output)
-            if exported_by and reason.startswith('requires example setup'):
-                reason = ''
-            inconclusive = (python and not reason and not exported_by and status in BROKEN - {'output_limit', 'disk_limit'}
-                            and python_inconclusive(code, status, output, rc))
-            if python and expired and specs and 'SENTINEL_VERSIONS=' not in out and len(out.encode()) < 15000:
-                inconclusive = 'skipped', 'Installing dependencies exceeded the time limit; not evaluated.'
-            if inconclusive:
-                status, reason = inconclusive
-            elif reason:
-                status = 'skipped'
-            elif status == 'needs_context':
-                reason = context_reason(output, code)
-            if exported_by and status == 'runtime_error' and (error := final_error(output)) and error['name'] == 'NameError':
-                missing = re.match(r"name '(\w+)'", error['message'] or '')
-                reason = f'`{missing[1] if missing else "name"}` is exported by `{exported_by}` but the snippet never imports it.'
-            result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
+            finish(out, rc, expired)
         except _RetryTimeout as exc:
-            output = retry_output[-6000:] + '\n' + str(exc)[-1500:] + '\nOptional-peer retry timed out'
-            result.update(status='output_limit' if 'SENTINEL_OUTPUT_LIMIT:' in str(exc) else 'timeout',
-                          stderr=output, exit_code=-9)
+            output = retry_output + '\n' + str(exc) + '\nOptional-peer retry timed out'
+            finish(output, -9, True)
         except InfrastructureError as exc:
             if retry_output is None or _stopping.is_set():
                 raise
