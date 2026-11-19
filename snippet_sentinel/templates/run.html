@@ -15,6 +15,15 @@
 {% elif run.error %}
 <section role="alert"><h2 class="error">Scan failed</h2><p>No verdict is available for this repository. The scan could not complete.</p><pre>{{ run.error }}</pre></section>
 {% else %}
+{% if not static and run.repo_url %}
+{% if not run.fix_job %}{% if run.results|selectattr('status','in',broken_statuses)|list %}<section><form method="post" action="/runs/{{ run.id }}/fix"><button>Propose fixes</button></form><p>Offline rules first; configured LLMs receive snippet code and error output. Candidates execute using the scan runner.</p></section>{% endif %}
+{% else %}<section><h2>Fixes · {{ run.fix_job.status }}</h2>
+{% if run.fix_job.status in ['pending','running'] %}<p>Working… This page refreshes every five seconds.</p>{% endif %}
+{% if run.fix_job.error %}<p class="error" role="alert">{{ run.fix_job.error }}</p>{% endif %}
+{% if run.fix_job.pr_url %}<p><a href="{{ run.fix_job.pr_url }}">View fix PR</a></p>
+{% elif run.fix_job.status in ['done','error'] %}{% if run.fix_job.results|selectattr('verified')|list %}<form method="post" action="/runs/{{ run.id }}/fix/pr"><button>Open fix PR</button></form>{% else %}<p>No verified fixes available.</p>{% endif %}{% endif %}
+{% for fix in run.fix_job.results %}<h3>{{ fix.file }}:{{ fix.line }}</h3><span class="badge">{{ 'Verified' if fix.verified else 'Not verified' }}</span> {{ fix.proposer or 'No proposal' }}
+<pre>{{ fix.diff or 'No change proposed' }}</pre>{% if fix.output %}<pre>{{ fix.output }}</pre>{% endif %}{% endfor %}</section>{% endif %}{% endif %}
 <section aria-labelledby="results-heading">
   <div class="section-heading"><h2 id="results-heading">Scan results</h2><p class="note">Failures shown first</p></div>
   <div class="summary-grid">
