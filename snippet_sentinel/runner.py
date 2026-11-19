@@ -24,7 +24,7 @@ def documented_failure(snippet, status, output):
     error = final_error(output)
     if not error:
         return ''
-    name, message = error['name'], error['message']
+    name, message = error['name'], error['message'] or ''
     if name == snippet.expected_error:
         return f'demonstrates {name} as documented'
     if name == 'NameError':

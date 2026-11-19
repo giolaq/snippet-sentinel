@@ -313,6 +313,8 @@ def test_extract_non_runnable_python_blocks(tmp_path):
     ('await unknown()', '', 'syntax_error'),
     ('raise ValueError("expected")', 'ValueError: expected', 'skipped'),
     ('raise TypeError("wrong exception")', 'ValueError: expected', 'runtime_error'),
+    ('try:\n    raise ValueError("expected")\nexcept ValueError as exc:\n    raise TypeError from exc',
+     'ValueError: expected', 'runtime_error'),
     ('print("healthy result")', 'ValueError: illustrative text', 'pass'),
 ])
 def test_run_documentation_fragments(tmp_path, body, output, expected):

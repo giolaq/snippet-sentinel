@@ -5,7 +5,11 @@ BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout'}
 INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context'}
 CAUGHT_AUTH_FAILURE = re.compile(r'AuthenticationError|Invalid API Key provided|Incorrect API key provided|'
                                  r'\b(?:statusCode|status)["\']?\s*[:=]\s*401\b|\b401 Unauthorized\b')
-ERROR_LINE = re.compile(r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception))(?: \[(?P<code>[A-Z_]+)\])?: (?P<message>[^\n]*)', re.M)
+ERROR_LINE = re.compile(
+    r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception))(?: \[(?P<code>[A-Z_]+)\])?'
+    r'(?::[ \t]*(?P<message>[^\n]*))?$',
+    re.M,
+)
 
 
 def final_error(output):
