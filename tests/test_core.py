@@ -281,6 +281,14 @@ def test_indented_fence(tmp_path):
     assert extract(tmp_path)[0][0].code == 'print(1)'
 
 
+def test_unclosed_fence_at_eof(tmp_path):
+    (tmp_path / 'a.md').write_text('\x60\x60\x60python\nprint(1)\n')
+    snippets, _ = extract(tmp_path)
+    assert len(snippets) == 1
+    assert snippets[0].code == 'print(1)'
+    assert snippets[0].expected_error == ''
+
+
 def test_extract_non_runnable_python_blocks(tmp_path):
     (tmp_path / 'a.md').write_text(
         '\x60\x60\x60python\n$ pip install sdk\n\x60\x60\x60\n'

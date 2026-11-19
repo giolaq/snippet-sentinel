@@ -87,7 +87,8 @@ def extract(root):
                     remove = min(indent, len(line) - len(line.lstrip()))
                     body.append(line[remove:])
                     i += 1
-                i += 1
+                if i < len(lines):
+                    i += 1
                 raw_lang = info.strip().split()[0].lower() if info.strip() else ''
                 lang = LANGS.get(raw_lang)
                 if not lang:
