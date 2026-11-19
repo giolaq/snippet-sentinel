@@ -44,8 +44,10 @@ def undefined_name(stderr, code):
 
 
 def missing_env(stderr, code):
-    names = {a or b for a, b in re.findall(r'process\.env(?:\.([A-Z][A-Z0-9_]+)|\[\s*[\'"]([A-Z][A-Z0-9_]+)[\'"]\s*\])', code)}
-    return bool(names) and (bool(re.search(r'Error: Missing\b', stderr)) or
+    names = {a or b for a, b, _ in re.findall(
+        r'process\.env(?:\.([A-Z][A-Z0-9_]+)(?![\w$])|\[\s*[\'"]([A-Z][A-Z0-9_]+)[\'"]\s*\])(?!\s*(?:\?\?|\|\|)(?!\s*([\'"\x60])\3))', code)}
+    unset = r'Error: Missing\b|Cannot read properties of undefined|\b(?:is )?(?:mandatory|required)\b'
+    return bool(names) and (bool(re.search(unset, stderr)) or
                             any(re.search(rf'Error\b.*\b{re.escape(n)}\b', stderr) for n in names))
 
 
@@ -55,11 +57,20 @@ def local_import(stderr):
     return match and match.group(1)
 
 
-def context_reason(stderr, code):
+def browser_only(stderr):
+    """Browser APIs or page-relative URLs: the example is meant to run in a web page, not Node."""
+    match = re.search(r'Failed to parse URL from (/\S*)|\brequires a browser\b', stderr)
+    return match and (f'Fetches the page-relative URL `{match.group(1)}`' if match.group(1) else 'Needs a browser')
+
+
+def context_reason(output, code):
+    stderr = error_summary(output)
     if name := undefined_name(stderr, code):
         return f'Uses `{name}` without defining it: likely continues an earlier example or expects a browser page.'
     if path := local_import(stderr):
         return f'Imports `{path}` from the reader\'s own project.'
+    if browser := browser_only(stderr if final_error(output) else output):
+        return f'{browser}: meant to run in a web page, not Node.'
     return None
 
 
@@ -83,11 +94,12 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
         return 'missing_dependency'
     if re.search(r'\b(?:HTTP(?: status)?|status(?: code)?|client error)\s*:?\s*[\'\"]?40[13]\b|\b40[13]\s+(?:Unauthorized|Forbidden)\b'
                  r'|\b(?:Missing|No|Invalid|Expired) (?:\w+ )?(?:credentials?|API[ _-]?key|access token)\b'
-                 r'|\b(?:AuthenticationError|UnauthorizedError)\b|failed to read the token file\b'
+                 r'|\b(?:AuthenticationError|UnauthorizedError)\b|failed to read (?:the token file|[\w ]*\btoken from)\b'
+                 r'|\bCould not find credentials\b|\bcredentials? requires\b|\bauthentication failed\b'
                  r'|(?:KeyError:\s*[\'\"]|\b(?:os\.environ|process\.env)\.)[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
                  r'|missing (?:environment|env) (?:variable|var)\s+[\x60\'\"]?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
                  r'|[\x60\'\"][A-Z][A-Z0-9_]+[\x60\'\"] environment variable\b', summary, re.I) or missing_env(summary, code):
         return 'needs_credentials'
-    if undefined_name(summary, code):
+    if undefined_name(summary, code) or browser_only(summary if final_error(stderr) else stderr):
         return 'needs_context'
     return 'runtime_error'
