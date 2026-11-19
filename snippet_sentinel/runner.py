@@ -19,7 +19,8 @@ ERROR_PATHS = re.compile(rf'({QUOTED_PATH})(?: -> ({QUOTED_PATH}))?')
 
 
 class InfrastructureError(RuntimeError):
-    pass
+    def __init__(self, diagnostics):
+        super().__init__("Docker couldn't run this snippet — start Docker (or check DOCKER_HOST) and retry.\n" + str(diagnostics))
 
 
 def missing_placeholder_path(code, message, frames):

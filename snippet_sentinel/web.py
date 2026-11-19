@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .classifier import BROKEN, INCONCLUSIVE
-from .scan import github_url, scan
+from .scan import DEFAULT_MAX_SNIPPETS, github_url, scan
 from .storage import Store
 from .fixer import fix_run
 from .github import open_fix_pr
@@ -91,7 +91,7 @@ def create_app(db='sentinel.db'):
 
     def home_page(**context):
         return templates.get_template('home.html').render(
-            runs=[present_run(run) for run in store.leaderboard()], **context)
+            runs=[present_run(run) for run in store.leaderboard()], max_snippets=DEFAULT_MAX_SNIPPETS, **context)
 
     @app.get('/', response_class=HTMLResponse)
     def home():
@@ -101,19 +101,21 @@ def create_app(db='sentinel.db'):
     async def start(request: Request, background: BackgroundTasks):
         form = parse_qs((await request.body()).decode())
         entered_url = form.get('url', [''])[0]
+        ref = form.get('ref', [''])[0].strip()
         try:
             url = github_url(entered_url)
         except ValueError as exc:
-            return HTMLResponse(home_page(error=str(exc), entered_url=entered_url), status_code=400)
-        run_id = store.start(url)
+            return HTMLResponse(home_page(error=str(exc), entered_url=entered_url, entered_ref=ref), status_code=400)
+        run_id, created = store.start_or_reuse(url, ref)
 
         def work():
             try:
-                scan(url, db=db, run_id=run_id)
+                scan(url, db=db, ref=ref or None, run_id=run_id)
             except Exception:
                 pass  # scan persists the error for the progress page.
 
-        background.add_task(work)
+        if created:
+            background.add_task(work)
         return RedirectResponse(f'/runs/{run_id}', status_code=303)
 
     @app.get('/runs/{run_id}', response_class=HTMLResponse)

@@ -1,8 +1,9 @@
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from .scan import scan
+from .scan import DEFAULT_MAX_SNIPPETS, scan
 from .web import create_app, render_run
 
 
@@ -10,6 +11,13 @@ def positive(value):
     number = int(value)
     if number < 1:
         raise argparse.ArgumentTypeError('must be positive')
+    return number
+
+
+def nonnegative(value):
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError('must be nonnegative (0 means unlimited)')
     return number
 
 
@@ -23,6 +31,8 @@ def main():
     scanner.add_argument('--runner', choices=['docker', 'local'], default='docker')
     scanner.add_argument('--jobs', type=positive, default=4)
     scanner.add_argument('--timeout', type=positive, default=60)
+    scanner.add_argument('--max-snippets', type=nonnegative, default=DEFAULT_MAX_SNIPPETS,
+                         help=f'maximum snippets per scan (default: {DEFAULT_MAX_SNIPPETS}; 0 = unlimited)')
     scanner.add_argument('--pin', action='append', default=[])
     scanner.add_argument('--db', default='sentinel.db')
     scanner.add_argument('--html')
@@ -57,9 +67,10 @@ def main():
         uvicorn.run(create_app(args.db), host=args.host, port=args.port)
         return
     if args.runner == 'local':
-        print('WARNING: local runner is UNSANDBOXED. Only scan trusted code.')
+        print('WARNING: local runner is UNSANDBOXED. Only scan trusted code.', file=sys.stderr)
     try:
-        result = scan(args.source, args.db, args.ref, args.lang, args.runner, args.jobs, args.timeout, args.pin)
+        result = scan(args.source, args.db, args.ref, args.lang, args.runner, args.jobs, args.timeout, args.pin,
+                      max_snippets=args.max_snippets, progress=lambda message: print(message, file=sys.stderr, flush=True))
     except Exception as exc:
         parser.exit(1, f'Scan failed: {exc}\n')
     print(f"Run {result['id']} | {result['repo']} | {result['ref']} | runner={args.runner}")
