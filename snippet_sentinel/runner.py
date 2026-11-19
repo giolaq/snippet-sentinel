@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -9,12 +10,33 @@ import time
 import uuid
 from pathlib import Path
 
-from .classifier import classify, undefined_name
+from .classifier import classify, error_summary, final_error, undefined_name
 from .dependencies import dependencies, javascript_mode, pinned
 
 
 class InfrastructureError(RuntimeError):
     pass
+
+
+def documented_failure(snippet, status, output):
+    if status not in {'syntax_error', 'runtime_error', 'missing_dependency', 'needs_credentials', 'needs_context'}:
+        return ''
+    error = final_error(output)
+    if not error:
+        return ''
+    name, message = error['name'], error['message'] or ''
+    if name == snippet.expected_error:
+        return f'demonstrates {name} as documented'
+    if name == 'NameError':
+        missing = re.fullmatch(
+            r"name '(\w+)' is not defined(?:\. (?:Did you mean: .+|Did you forget to import '\1'\?))?",
+            message,
+        )
+        if missing and missing[1] in snippet.context_names:
+            return f'requires earlier setup: {missing[1]}'
+    if name == 'SyntaxError' and message == "'await' outside function" and snippet.context_names:
+        return 'async fragment requiring earlier setup: ' + ', '.join(snippet.context_names)
+    return ''
 
 
 def command(args, cwd, timeout, env=None):
@@ -142,11 +164,16 @@ process.exit(r.status === null ? 1 : r.status);
                         pass
                 else:
                     lines.append(line)
-            status = classify(out, rc, expired, 'SENTINEL_INSTALL_FAILED' in out, snippet.code)
-            result.update(status=status, stderr='\n'.join(lines)[-8000:], exit_code=rc)
-            if status == 'needs_context':
-                result['reason'] = (f'Uses `{undefined_name(out, snippet.code)}` without defining it: '
-                                    'likely continues an earlier example or expects a browser page.')
+            install_failed = 'SENTINEL_INSTALL_FAILED' in lines
+            output = '\n'.join(lines)
+            status = classify(output, rc, expired, install_failed, snippet.code)
+            reason = '' if install_failed else documented_failure(snippet, status, output)
+            if reason:
+                status = 'skipped'
+            elif status == 'needs_context':
+                reason = (f'Uses `{undefined_name(error_summary(output), snippet.code)}` without defining it: '
+                          'likely continues an earlier example or expects a browser page.')
+            result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
         except OSError as exc:
             if runner == 'docker':
                 raise InfrastructureError(f'Docker unavailable: {exc}') from exc

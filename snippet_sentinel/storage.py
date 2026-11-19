@@ -74,6 +74,7 @@ class Store:
             c = run['counts']
             broken = sum(c.get(s, 0) for s in BROKEN)
             runnable = sum(c.values()) - sum(c.get(s, 0) for s in INCONCLUSIVE)
-            run.update(broken=broken, runnable=runnable, percent=100 * broken / runnable if runnable else 0)
+            percent = 100 * broken / runnable if run['finished'] and not run['error'] and runnable else None
+            run.update(broken=broken, runnable=runnable, percent=percent)
             board.append(run)
-        return sorted(board, key=lambda r: r['percent'], reverse=True)
+        return sorted(board, key=lambda r: r['percent'] if r['percent'] is not None else -1, reverse=True)

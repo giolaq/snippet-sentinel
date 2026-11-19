@@ -66,8 +66,8 @@ def is_esm(code):
 def pinned(packages, pins, lang):
     overrides = {}
     for pin in pins:
-        if lang == 'python' and re.fullmatch(r'[\w.-]+==[\w.+-]+', pin):
-            overrides[pin.split('==')[0].lower().replace('_', '-')] = pin
+        if lang == 'python' and (match := re.fullmatch(r'([\w.-]+)(?:\[[\w.-]+(?:,[\w.-]+)*\])?==[\w.+-]+', pin)):
+            overrides[re.sub(r'[-_.]+', '-', match[1].lower())] = pin
         elif lang == 'javascript' and re.fullmatch(r'(?:@[\w.-]+/)?[\w.-]+@[\w.^~+*-]+', pin):
             overrides[pin.rsplit('@', 1)[0]] = pin
-    return [overrides.get(p.lower().replace('_', '-') if lang == 'python' else p, p) for p in packages]
+    return [overrides.get(re.sub(r'[-_.]+', '-', p.lower()) if lang == 'python' else p, p) for p in packages]

@@ -10,7 +10,7 @@ from snippet_sentinel.classifier import classify
 from snippet_sentinel.dependencies import dependencies, is_esm, pinned
 from snippet_sentinel.extractor import extract
 from snippet_sentinel.extractor import Snippet
-from snippet_sentinel.runner import InfrastructureError, run
+from snippet_sentinel.runner import InfrastructureError, documented_failure, run
 from snippet_sentinel.scan import github_url, scan
 from snippet_sentinel.storage import Store
 from snippet_sentinel.web import create_app, render_run
@@ -59,6 +59,12 @@ def test_pins_and_esm():
     assert pinned(['@a/b'], ['@a/b@1.2.3'], 'javascript') == ['@a/b@1.2.3']
     assert is_esm('await Promise.resolve(1)')
     assert not is_esm("const fs = require('fs')")
+
+
+def test_python_pin_with_extras():
+    assert pinned(['example-sdk', 'other'], ['Example.SDK[async,socks]==1.2.3', 'unused==1.0'], 'python') == [
+        'Example.SDK[async,socks]==1.2.3', 'other',
+    ]
 
 
 @pytest.mark.parametrize('code,esm', [
@@ -152,6 +158,21 @@ def test_needs_context_reason_and_leaderboard(tmp_path):
 def test_timeout_install():
     assert classify('', -9, timed_out=True) == 'timeout'
     assert classify('', 1, install_failed=True) == 'missing_dependency'
+
+
+@pytest.mark.parametrize('output,expected', [
+    ('Traceback (most recent call last):\n    print(os.environ.get("CONFIG"))\nTypeError: None is not iterable',
+     'runtime_error'),
+    ('Traceback (most recent call last):\n    print(401 / 0)\nZeroDivisionError: division by zero',
+     'runtime_error'),
+    ('ModuleNotFoundError: No module named "plugin"\n\n'
+     'The above exception was the direct cause of the following exception:\n'
+     'demo.SDKError: Missing credentials. Please pass an api_key.', 'needs_credentials'),
+    ("Traceback (most recent call last):\nKeyError: 'CLIENT_CERTIFICATE_CHAIN'", 'needs_credentials'),
+    ("Traceback (most recent call last):\nKeyError: 'CONFIG_FILE'", 'runtime_error'),
+])
+def test_classifier_uses_final_error(output, expected):
+    assert classify(output, 1) == expected
 
 
 def test_local_demo(tmp_path):
@@ -258,6 +279,103 @@ def test_github_markdown_source_links(filename, static):
 def test_indented_fence(tmp_path):
     (tmp_path / 'a.md').write_text('  ```python\n  print(1)\n  ```\n')
     assert extract(tmp_path)[0][0].code == 'print(1)'
+
+
+def test_unclosed_fence_at_eof(tmp_path):
+    (tmp_path / 'a.md').write_text('\x60\x60\x60python\nprint(1)\n')
+    snippets, _ = extract(tmp_path)
+    assert len(snippets) == 1
+    assert snippets[0].code == 'print(1)'
+    assert snippets[0].expected_error == ''
+
+
+def test_commented_python_repl_transcript(tmp_path):
+    (tmp_path / 'a.md').write_text('\x60\x60\x60python\n# Interactive example\n\n>>> print(1)\n1\n\x60\x60\x60\n')
+    snippets, _ = extract(tmp_path)
+    assert snippets[0].reason == 'REPL transcript'
+
+
+def test_extract_non_runnable_python_blocks(tmp_path):
+    (tmp_path / 'a.md').write_text(
+        '\x60\x60\x60python\n$ pip install sdk\n\x60\x60\x60\n'
+        '\x60\x60\x60py\n# Install the SDK\npython -m pip install sdk\nexport SDK_MODE=demo\n\x60\x60\x60\n'
+        '\x60\x60\x60pycon\n>>> import json\n\x60\x60\x60\n'
+        '\x60\x60\x60python {lint="skip"}\nprint(1)\n\x60\x60\x60\n'
+        '\x60\x60\x60python {test="skip" lint="skip"}\nprint(2)\n\x60\x60\x60\n'
+        '\x60\x60\x60python\ntext = """\n...\n>>> ignored\n$ pip install sdk\n"""\nprint(text)\n\x60\x60\x60\n'
+        '\x60\x60\x60python\npip = 1\nprint(pip)\n\x60\x60\x60\n'
+    )
+    snippets, _ = extract(tmp_path)
+    assert [s.reason for s in snippets] == [
+        'shell commands in a Python fence', 'shell commands in a Python fence', 'REPL transcript', '',
+        'info-string opt-out', '', '',
+    ]
+
+
+@pytest.mark.parametrize('body,output,expected', [
+    ('json.dumps(1)', '', 'skipped'),
+    ('await json.load(None)', '', 'skipped'),
+    ('jsons.dumps(1)', '', 'runtime_error'),
+    ('await unknown()', '', 'syntax_error'),
+    ('raise ValueError("expected")', 'ValueError: expected', 'skipped'),
+    ('raise TypeError("wrong exception")', 'ValueError: expected', 'runtime_error'),
+    ('try:\n    raise ValueError("expected")\nexcept ValueError as exc:\n    raise TypeError from exc',
+     'ValueError: expected', 'runtime_error'),
+    ('print("healthy result")', 'ValueError: illustrative text', 'pass'),
+])
+def test_run_documentation_fragments(tmp_path, body, output, expected):
+    text = '\x60\x60\x60pycon\n>>> import json\n\x60\x60\x60\n\n\x60\x60\x60python\n' + body + '\n\x60\x60\x60\n'
+    if output:
+        text += '\n\x60\x60\x60output\n' + output + '\n\x60\x60\x60\n'
+    (tmp_path / 'a.md').write_text(text)
+    snippet = extract(tmp_path)[0][1]
+    result = run(snippet, runner='local')
+    assert result['status'] == expected, result
+    assert bool(result['reason']) == (expected == 'skipped')
+
+
+def test_name_error_with_import_suggestion():
+    output = "NameError: name 'json' is not defined. Did you forget to import 'json'?"
+    snippet = Snippet('x', 'a.md', 1, 'python', 'json.dumps(1)', context_names=('json',))
+    assert documented_failure(snippet, 'runtime_error', output) == 'requires earlier setup: json'
+    snippet.context_names = ('other',)
+    assert documented_failure(snippet, 'runtime_error', output) == ''
+
+
+def test_run_documented_javascript_reference_error(tmp_path):
+    if not shutil.which('node') or not shutil.which('npm'):
+        pytest.skip('Local Node and npm required')
+    (tmp_path / 'a.md').write_text(
+        '\x60\x60\x60js\nconsole.log(exampleValue)\n\x60\x60\x60\n\n'
+        '\x60\x60\x60output\nReferenceError: exampleValue is not defined\n\x60\x60\x60\n'
+    )
+    snippet = extract(tmp_path)[0][0]
+    result = run(snippet, runner='local')
+    assert result['status'] == 'skipped', result
+    assert result['reason'] == 'demonstrates ReferenceError as documented'
+
+
+def test_leaderboard_places_unassessed_runs_after_measured_runs(tmp_path):
+    db = tmp_path / 'leaderboard.db'
+    store = Store(db)
+    for repo, statuses, error in [
+        ('measured', ['pass'], ''),
+        ('credentials', ['needs_credentials', 'skipped'], ''),
+        ('failed', [], 'Docker unavailable'),
+        ('running', None, ''),
+    ]:
+        rid = store.start(repo)
+        if statuses is not None:
+            store.finish(rid, [{'id': str(i), 'status': status} for i, status in enumerate(statuses)], {}, error=error)
+    assert [(r['repo'], r['percent']) for r in store.leaderboard()] == [
+        ('measured', 0), ('credentials', None), ('failed', None), ('running', None),
+    ]
+    html = TestClient(create_app(db)).get('/').text
+    assert html.count('0.0%') == 1
+    assert '0 of 1 checked' in html
+    assert 'No eligible snippets' in html
+    assert html.count('Not available') == 2
+    assert html.count('class="rank"') == 1
 
 
 def test_identity_includes_normalized_language(tmp_path):

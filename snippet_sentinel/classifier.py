@@ -5,6 +5,23 @@ BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout'}
 INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context'}
 CAUGHT_AUTH_FAILURE = re.compile(r'AuthenticationError|Invalid API Key provided|Incorrect API key provided|'
                                  r'\b(?:statusCode|status)["\']?\s*[:=]\s*401\b|\b401 Unauthorized\b')
+ERROR_LINE = re.compile(
+    r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception))(?: \[(?P<code>[A-Z_]+)\])?'
+    r'(?::[ \t]*(?P<message>[^\n]*))?$',
+    re.M,
+)
+
+
+def final_error(output):
+    return next(reversed(list(ERROR_LINE.finditer(output))), None)
+
+
+def error_summary(output):
+    error = final_error(output)
+    if error:
+        return error[0]
+    output = output.strip()
+    return output if '\n' not in output else ''
 
 
 def undefined_name(stderr, code):
@@ -39,14 +56,19 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
     if exit_code == 0:
         # Samples often catch and print API errors; a caught 401 did not exercise the documented call.
         return 'needs_credentials' if CAUGHT_AUTH_FAILURE.search(stderr) else 'pass'
-    if re.search(r'does not provide an export named', stderr):
+    summary = error_summary(stderr)
+    if re.search(r'does not provide an export named', summary):
         return 'runtime_error'
-    if re.search(r'SyntaxError|IndentationError|Unexpected token', stderr, re.I):
+    if re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token', summary, re.I):
         return 'syntax_error'
-    if re.search(r'ModuleNotFoundError|No module named|Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND', stderr, re.I):
+    if re.search(r'ModuleNotFoundError|No module named|Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND', summary, re.I):
         return 'missing_dependency'
-    if re.search(r'\b40[13]\b|unauthorized|invalid.?api.?key|authentication|missing credentials|missing (?:environment|env) (?:variable|var)|os\.environ|process\.env|KeyError:.*(?:KEY|TOKEN|SECRET|PASSWORD)', stderr, re.I) or missing_env(stderr, code):
+    if re.search(r'\b(?:HTTP(?: status)?|status(?: code)?|client error)\s*:?\s*[\'\"]?40[13]\b|\b40[13]\s+(?:Unauthorized|Forbidden)\b'
+                 r'|\b(?:Missing|No|Invalid|Expired) (?:\w+ )?(?:credentials?|API[ _-]?key|access token)\b'
+                 r'|\b(?:AuthenticationError|UnauthorizedError)\b|failed to read the token file\b'
+                 r'|(?:KeyError:\s*[\'\"]|\b(?:os\.environ|process\.env)\.)[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
+                 r'|missing (?:environment|env) (?:variable|var)\s+[\x60\'\"]?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b', summary, re.I) or missing_env(summary, code):
         return 'needs_credentials'
-    if undefined_name(stderr, code):
+    if undefined_name(summary, code):
         return 'needs_context'
     return 'runtime_error'
