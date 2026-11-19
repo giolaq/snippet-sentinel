@@ -84,7 +84,7 @@ console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries(packages.filt
 let r;
 if (filename.endsWith('.cjs')) {
  r = spawnSync('node', [filename], {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
- if (r.status !== 0 && /SyntaxError: await is only valid in async functions and the top level bodies of modules/.test(r.stderr || '')) {
+ if (r.status !== 0 && /SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)/.test(r.stderr || '')) {
   const code = fs.readFileSync(filename, 'utf8');
   const wrapped = 'snippet-async.cjs';
   fs.writeFileSync(wrapped, '(async () => {\\n' + code + '\\n})().catch(error => { console.error(error); process.exitCode = 1; });\\n');

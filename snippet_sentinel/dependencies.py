@@ -54,7 +54,9 @@ def dependencies(code, lang):
 
 
 def javascript_mode(code):
-    return bool(re.search(r'\b(?:import|export)\s', code)) or not re.search(r'\brequire\s*\(', code)
+    esm = re.search(r'''\b(?:import(?=\s|[{'"*])|export(?=\s|[{*]))''', code)
+    commonjs = re.search(r'\brequire\s*\(|\bmodule\s*\.\s*exports\b|\bexports\s*\.|\b__(?:dirname|filename)\b', code)
+    return bool(esm) or not commonjs
 
 
 def is_esm(code):

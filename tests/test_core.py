@@ -70,6 +70,12 @@ def test_pins_and_esm():
     ("// import x from 'x'\nconsole.log('await import export');", True),
     ("import('node:fs').then(() => {});", True),
     ("import fs from 'node:fs'; await Promise.resolve();", True),
+    ("module.exports = {};", False),
+    ("exports.value = 1;", False),
+    ("console.log(__dirname);", False),
+    ("console.log(__filename);", False),
+    ("import{createRequire}from'node:module'; const require = createRequire(import.meta.url); require('node:fs');", True),
+    ("import*as m from'node:module'; const require = m.createRequire(import.meta.url); require('node:fs');", True),
     ('', True),
 ])
 def test_javascript_module_mode(code, esm):
@@ -86,6 +92,13 @@ def test_javascript_module_mode(code, esm):
     ("const fs = require('node:fs'); console.log(`${await Promise.resolve('value')}`);", 'syntax_error'),
     ("const fs = require('node:fs')\nconst f = async () => await Promise.resolve(1)\nawait f()", 'pass'),
     ("const fs = require('node:fs'); const broken = ;", 'syntax_error'),
+    ("module.exports = {value: 1};", 'pass'),
+    ("exports.value = 1;", 'pass'),
+    ("console.log(__dirname);", 'pass'),
+    ("console.log(__filename);", 'pass'),
+    ("const fs = require('node:fs'); for await (const x of [1, 2]) { console.log(x); }", 'pass'),
+    ("import{createRequire}from'node:module'; const require = createRequire(import.meta.url); require('node:fs');", 'pass'),
+    ("import*as m from'node:module'; const require = m.createRequire(import.meta.url); require('node:fs');", 'pass'),
 ])
 def test_async_commonjs_execution(code, expected, runner):
     if runner == 'local' and not shutil.which('node'):
