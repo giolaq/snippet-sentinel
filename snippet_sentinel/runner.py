@@ -14,19 +14,27 @@ from pathlib import Path
 from .classifier import classify, error_summary, final_error, undefined_name
 from .dependencies import dependencies, javascript_mode, pinned, python_package
 
+QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
+ERROR_PATHS = re.compile(rf'({QUOTED_PATH})(?: -> ({QUOTED_PATH}))?')
+
 
 class InfrastructureError(RuntimeError):
     pass
 
 
 def missing_placeholder_path(code, message, frames):
-    _, separator, filename = message.partition(': ')
+    _, separator, filenames = message.partition(': ')
     if separator:
-        try:
-            path = ast.literal_eval(filename)
-        except (SyntaxError, ValueError):
-            return ''
-        return path if isinstance(path, str) and path.startswith('/path/to/') else ''
+        match = ERROR_PATHS.fullmatch(filenames)
+        if match:
+            for filename in filter(None, match.groups()):
+                try:
+                    path = ast.literal_eval(filename)
+                except (SyntaxError, ValueError):
+                    continue
+                if path.startswith('/path/to/'):
+                    return path
+        return ''
     if not frames or not frames[-1][0].endswith('/ssl.py'):
         return ''
     lines = [int(line) for file, line in frames if file.endswith('/snippet.py')]
