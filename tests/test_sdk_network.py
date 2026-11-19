@@ -39,6 +39,22 @@ def test_terminal_programming_error_is_broken(output):
     assert classify(output, 1) == 'runtime_error'
 
 
+@pytest.mark.parametrize('terminal', ['ZeroDivisionError: division by zero', 'ValueError: bad argument',
+                                     'ValueError: Network is unreachable', 'RuntimeError: application failed',
+                                     'RangeError: out of range'])
+def test_caught_network_does_not_hide_terminal_failure(terminal):
+    output = MARKER + '\nConnectionError: Network is unreachable\n\n' + terminal
+    assert classify(output, 1, network_disabled=True) == 'runtime_error'
+
+
+@pytest.mark.parametrize('terminal', ['APIConnectionError: Connection error.', 'httpx.ConnectError: failed',
+                                     'socket.gaierror: [Errno -3] Network disabled by Snippet Sentinel',
+                                     'OSError: [Errno 101] Network disabled by Snippet Sentinel',
+                                     'AxiosError: Network disabled by Snippet Sentinel'])
+def test_terminal_connection_failure_is_inconclusive(terminal):
+    assert classify(MARKER + '\n' + terminal, 1, network_disabled=True) == 'needs_network'
+
+
 CASES = [
     ('python', "from openai import OpenAI\nOpenAI().chat.completions.create(model='gpt-4o-mini',messages=[{'role':'user','content':'hello'}])", 'needs_credentials'),
     ('python', "import os\nos.environ['OPENAI_API_KEY']='sentinel-dummy-key'\nfrom openai import OpenAI\nOpenAI().chat.completions.create(model='gpt-4o-mini',messages=[{'role':'user','content':'hello'}])", 'needs_network'),
@@ -57,6 +73,8 @@ CASES = [
     ('python', "import socket,time\ntry: socket.create_connection(('example.com',443))\nexcept OSError: time.sleep(60)", 'needs_network'),
     ('javascript', "try{await fetch('https://example.com')}catch{};await new Promise(r=>setTimeout(r,60000));", 'needs_network'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nobject().renamed_method()", 'runtime_error'),
+    ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\n1/0", 'runtime_error'),
+    ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nraise ValueError('bad input')", 'runtime_error'),
     ('javascript', "try{await fetch('https://example.com')}catch{};({}).renamed_method();", 'runtime_error'),
 ]
 

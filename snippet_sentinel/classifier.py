@@ -7,11 +7,14 @@ BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout', 'out
 INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context', 'needs_network'}
 CAUGHT_AUTH_FAILURE = re.compile(r'AuthenticationError|Invalid API Key provided|Incorrect API key provided|'
                                  r'\b(?:statusCode|status)["\']?\s*[:=]\s*401\b|\b401 Unauthorized\b')
-ERROR_LINE = re.compile(
-    r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception))(?: \[(?P<code>[A-Z_]+)\])?'
-    r'(?::[ \t]*(?P<message>[^\n]*))?$',
-    re.M,
-)
+ERROR_LINE = re.compile(r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception)|gaierror|herror)(?: \[(?P<code>[A-Z_]+)\])?'
+                        r'(?::[ \t]*(?P<message>[^\n]*))?$', re.M)
+CONNECTION_ERRORS = {'APIConnectionError', 'StripeConnectionError', 'ConnectionError', 'ConnectError',
+                     'EndpointConnectionError', 'NewConnectionError', 'NameResolutionError', 'gaierror', 'herror',
+                     'ConnectTimeout', 'ConnectTimeoutError', 'NetworkError'}
+NETWORK_FAILURE = re.compile(r'Network is unreachable|Network disabled by Snippet Sentinel|ENETUNREACH|EHOSTUNREACH|'
+                             r'EAI_AGAIN|ENOTFOUND|Temporary failure in name resolution|Name or service not known|'
+                             r'fetch failed|network request failed', re.I)
 
 
 def final_error(output):
@@ -88,9 +91,10 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', 
         return 'missing_dependency'
     error = final_error(stderr)
     summary = error[0] if error else stderr.strip() if '\n' not in stderr.strip() else ''
-    programming_error = re.search(r'\b(?:AttributeError|NameError|ReferenceError|SyntaxError|IndentationError|ModuleNotFoundError)\b', summary)
-    programming_error = programming_error or ('TypeError' in summary and not re.search(r'fetch failed|network request failed', summary, re.I))
-    if blocked and not programming_error:
+    network_error = (error and (error['name'] in CONNECTION_ERRORS or
+                               (error['name'] in {'Error', 'OSError', 'TypeError', 'AxiosError', 'FetchError', 'RequestError'}
+                                and NETWORK_FAILURE.search(summary)))) or (not error and NETWORK_FAILURE.search(summary))
+    if network_disabled and ((network_error and (blocked or exit_code != 0)) or (blocked and not error)):
         return 'needs_network'
     if exit_code == 0:
         # Samples often catch and print API errors; a caught 401 did not exercise the documented call.
@@ -98,8 +102,6 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', 
     summary = error_summary(stderr)
     if re.search(r'does not provide an export named', summary):
         return 'runtime_error'
-    if network_disabled and not programming_error and re.search(r'Network is unreachable|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|Temporary failure in name resolution|Name or service not known', summary, re.I):
-        return 'needs_network'
     if (re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token|Transform failed', summary, re.I)
             and not re.search(r'in JSON\b|is not valid JSON|Invalid JSON', summary)):
         return 'syntax_error'
