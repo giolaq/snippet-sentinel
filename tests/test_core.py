@@ -61,6 +61,12 @@ def test_pins_and_esm():
     assert not is_esm("const fs = require('fs')")
 
 
+def test_python_pin_with_extras():
+    assert pinned(['example-sdk', 'other'], ['Example.SDK[async,socks]==1.2.3', 'unused==1.0'], 'python') == [
+        'Example.SDK[async,socks]==1.2.3', 'other',
+    ]
+
+
 @pytest.mark.parametrize('code,esm', [
     ("const fs = require('node:fs'); async function main() { await Promise.resolve(); } main();", False),
     ("const fs = require('node:fs'); const main = async () => { await Promise.resolve(); }; main();", False),
