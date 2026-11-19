@@ -245,6 +245,8 @@ def parse(code):
 
 def reader_value(code, missing):
     """`update_job_labels(job_id=job_id)`: a value the reader supplies, not a missing import (called, `.attr`, `[...]`)."""
+    if missing in sys.stdlib_module_names:
+        return None
     tree = parse(code)
     uses = [node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == missing]
     if not uses:

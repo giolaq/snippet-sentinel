@@ -7,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from snippet_sentinel.fixer import LLM, Rules, fix_run
+from snippet_sentinel.classifier import BROKEN, classify, context_reason
+from snippet_sentinel.runner import python_inconclusive
 from snippet_sentinel.github import GitHub, open_fix_pr, replace_fence
 from snippet_sentinel.storage import Store
 from snippet_sentinel.scan import scan
@@ -76,6 +78,42 @@ def make_run(db, results=True):
               'status': 'runtime_error', 'stderr': "NameError: name 'os' is not defined", 'runner': 'docker', 'versions': {}}
     store.finish(rid, [result] if results else [], {}, 'a' * 40)
     return store, rid
+
+
+@pytest.mark.parametrize('lang,name,code,expected', [
+    ('javascript', 'path', "console.log(path.join('hello', 'world'));", 'runtime_error'),
+    ('javascript', 'fs', "fs.readFileSync('a');", 'runtime_error'),
+    ('javascript', 'os', 'console.log(os.platform());', 'runtime_error'),
+    ('javascript', 'crypto', 'console.log(crypto.randomUUID());', 'runtime_error'),
+    ('javascript', 'url', 'console.log(url.parse("https://example.com"));', 'runtime_error'),
+    ('javascript', 'util', 'console.log(util.inspect({}));', 'runtime_error'),
+    ('javascript', 'client', 'client.request();', 'needs_context'),
+    ('javascript', 'document', 'document.querySelector("a");', 'needs_context'),
+    ('python', 'json', 'print(json.dumps({}))', 'runtime_error'),
+    ('python', 'os', 'print(os.name)', 'runtime_error'),
+    ('python', 'json', 'print(json)', 'runtime_error'),
+])
+def test_builtin_classification_and_fix_eligibility(tmp_path, monkeypatch, lang, name, code, expected):
+    error = (f"NameError: name '{name}' is not defined" if lang == 'python' else
+             f'ReferenceError: {name} is not defined')
+    status = classify(error, 1, code=code)
+    assert status == expected
+    if lang == 'python':
+        assert python_inconclusive(code, status, error) is None
+    else:
+        assert bool(context_reason(error, code)) == (expected == 'needs_context')
+    db = tmp_path / 's.db'
+    store = Store(db)
+    rid = store.start('repo')
+    store.finish(rid, [{'id': 'x', 'file': 'a.md', 'line': 2, 'lang': lang, 'code': code,
+                        'stderr': error, 'status': status, 'runner': 'docker', 'versions': {}}], {})
+    verification = MagicMock(return_value={'status': 'pass', 'stderr': ''})
+    monkeypatch.setattr('snippet_sentinel.fixer.runner.run', verification)
+    fixes = fix_run(rid, db, [Rules()])['results']
+    assert len(fixes) == verification.call_count == int(status in BROKEN)
+    if fixes:
+        assert fixes[0]['verified']
+        assert fixes[0]['proposer'] == Rules.name
 
 
 @pytest.mark.parametrize('outcome', ['pass', 'runtime_error', 'exception', 'empty'])
