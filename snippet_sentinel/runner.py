@@ -412,6 +412,9 @@ def command(args, cwd, timeout, env=None, stdin=None):
             process.wait()
             process.stdout.close()
     tail = output[-16000:].decode(errors='replace')
+    error = final_error(output.decode(errors='replace'))
+    if error and error[0] not in tail:
+        tail = error[0][:512] + '\n' + tail
     if MARKER.encode() in output and MARKER not in tail:
         tail = MARKER + '\n' + tail
     if exceeded:

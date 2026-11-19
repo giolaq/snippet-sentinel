@@ -7,7 +7,7 @@ BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout', 'out
 INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context', 'needs_network'}
 CAUGHT_AUTH_FAILURE = re.compile(r'AuthenticationError|Invalid API Key provided|Incorrect API key provided|'
                                  r'\b(?:statusCode|status)["\']?\s*[:=]\s*401\b|\b401 (?:Client Error: )?Unauthorized\b')
-ERROR_LINE = re.compile(r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception)|gaierror|herror)(?: \[(?P<code>[A-Z_]+)\])?'
+ERROR_LINE = re.compile(r'^(?:\w+\.)*(?P<name>\w*(?:Error|Exception)|gaierror|herror|\w+(?=:))(?: \[(?P<code>[A-Z_]+)\])?'
                         r'(?::[ \t]*(?P<message>[^\n]*))?$', re.M)
 CONNECTION_ERRORS = {'APIConnectionError', 'StripeConnectionError', 'ConnectionError', 'ConnectError',
                      'EndpointConnectionError', 'NewConnectionError', 'NameResolutionError', 'gaierror', 'herror',
@@ -94,7 +94,7 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', 
     network_error = (error and (error['name'] in CONNECTION_ERRORS or
                                (error['name'] in {'Error', 'OSError', 'TypeError', 'AxiosError', 'FetchError', 'RequestError'}
                                 and NETWORK_FAILURE.search(summary)))) or (not error and NETWORK_FAILURE.search(summary))
-    if network_disabled and ((network_error and (blocked or exit_code != 0)) or (blocked and not error)):
+    if network_disabled and ((network_error and exit_code != 0) or (blocked and exit_code == 0)):
         return 'needs_network'
     if exit_code == 0:
         # Samples often catch and print API errors; a caught 401 did not exercise the documented call.

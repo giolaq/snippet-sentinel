@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from snippet_sentinel.classifier import classify
+from snippet_sentinel.classifier import classify, final_error
 from snippet_sentinel.extractor import Snippet
 from snippet_sentinel.network_guard import MARKER
 from snippet_sentinel.runner import command, run
@@ -30,6 +30,14 @@ def test_network_evidence_survives_output_tail(tmp_path):
     assert MARKER in out
 
 
+def test_terminal_connection_summary_survives_large_error_object(tmp_path):
+    code = f"import sys\nprint('{MARKER}');print('AxiosError: Network disabled by Snippet Sentinel');print('  nested detail\\n'*2000);sys.exit(1)"
+    out, rc, expired = command([sys.executable, '-c', code], tmp_path, 5)
+    assert final_error(out)['name'] == 'AxiosError'
+    assert classify(out, rc, expired, network_disabled=True) == 'needs_network'
+    assert len(out) < 17000
+
+
 @pytest.mark.parametrize('output', [
     "  client = OpenAI(api_key=os.environ['OPENAI_API_KEY'])\nAttributeError: object has no attribute 'renamed_method'",
     "AuthenticationError: earlier error\n\nAttributeError: object has no attribute 'renamed_method'",
@@ -41,10 +49,15 @@ def test_terminal_programming_error_is_broken(output):
 
 @pytest.mark.parametrize('terminal', ['ZeroDivisionError: division by zero', 'ValueError: bad argument',
                                      'ValueError: Network is unreachable', 'RuntimeError: application failed',
-                                     'RangeError: out of range'])
+                                     'RangeError: out of range', 'Exploded: bad input', 'custom_failure: bad input'])
 def test_caught_network_does_not_hide_terminal_failure(terminal):
     output = MARKER + '\nConnectionError: Network is unreachable\n\n' + terminal
     assert classify(output, 1, network_disabled=True) == 'runtime_error'
+
+
+def test_missing_terminal_connection_evidence_is_not_assumed():
+    assert classify(MARKER + '\nexiting with an error', 1, network_disabled=True) == 'runtime_error'
+    assert classify(MARKER + '\ncaught: continuing', 0, network_disabled=True) == 'needs_network'
 
 
 @pytest.mark.parametrize('terminal', ['APIConnectionError: Connection error.', 'httpx.ConnectError: failed',
@@ -88,6 +101,7 @@ CASES = [
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nobject().renamed_method()", 'runtime_error'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\n1/0", 'runtime_error'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nraise ValueError('bad input')", 'runtime_error'),
+    ('python', "import socket\nclass Exploded(Exception): pass\ntry: socket.create_connection(('example.com',443))\nexcept OSError as error: raise Exploded('bad input') from error", 'runtime_error'),
     ('javascript', "try{await fetch('https://example.com')}catch{};({}).renamed_method();", 'runtime_error'),
 ]
 
