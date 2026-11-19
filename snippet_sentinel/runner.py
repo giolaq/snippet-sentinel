@@ -269,19 +269,28 @@ _lock = threading.Lock()
 _stopping = threading.Event()
 
 
+def portable_start(pid):
+    try:
+        result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], capture_output=True, text=True, timeout=2)
+        return result.stdout.strip() if result.returncode == 0 else ''
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
 def owner_identity():
     try:
         started = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
         return f'{os.getpid()}:{started}'
     except (OSError, IndexError):
-        return f'{os.getpid()}:unknown-{socket.gethostname()}'
+        started = portable_start(os.getpid())
+        return f'{os.getpid()}:ps-{started}' if started else f'{os.getpid()}:unknown-{socket.gethostname()}'
 
 
 def owner_namespace():
     try:
         return os.readlink('/proc/self/ns/pid')
     except OSError:
-        return ''
+        return f'host:{socket.gethostname()}'
 
 
 def owner_container():
@@ -317,8 +326,18 @@ def _cleanup_stale():
         labels = json.loads(info.stdout)
         if namespace and labels.get('snippet-sentinel.namespace') == namespace:
             try:
-                pid, started = labels.get('snippet-sentinel.owner', '').split(':')
-                live = Path(f'/proc/{int(pid)}/stat').read_text().rsplit(')', 1)[1].split()[19] == started
+                pid, started = labels.get('snippet-sentinel.owner', '').split(':', 1)
+                pid = int(pid)
+                if pid <= 0:
+                    continue
+                if namespace.startswith('host:'):
+                    os.kill(pid, 0)
+                    current = portable_start(pid)
+                    live = not (started.startswith('ps-') and current and started[3:] != current)
+                else:
+                    live = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19] == started
+            except ProcessLookupError:
+                live = False
             except FileNotFoundError:
                 live = False
             except (ValueError, OSError, IndexError):

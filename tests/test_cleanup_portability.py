@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 from pathlib import Path
 
@@ -27,11 +28,11 @@ def test_missing_proc_does_not_prevent_docker_scan(monkeypatch):
     monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
     monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda args, **kw: subprocess.CompletedProcess(args, 0, '', ''))
     assert owner_identity().startswith(f'{os.getpid()}:unknown-')
-    assert owner_namespace() == ''
+    assert owner_namespace().startswith('host:')
     assert owner_container() == ''
     cleanup_stale()
     assert run(Snippet('x', 'a.md', 1, 'python', 'print(1)'))['status'] == 'pass'
-    assert any('snippet-sentinel.namespace=' in c for c in commands)
+    assert any(any(arg.startswith('snippet-sentinel.namespace=host:') for arg in c) for c in commands)
 
 
 @pytest.mark.parametrize('error', [FileNotFoundError('docker'), subprocess.TimeoutExpired('docker', 10), ValueError('bad metadata')])
@@ -53,8 +54,6 @@ def test_installed_console_script_is_on_path():
 
 @pytest.mark.parametrize('state,removed', [('permission', False), ('io', False), ('malformed', False), ('gone', True), ('mismatch', True), ('live', False)])
 def test_only_definitely_dead_owners_are_reaped(monkeypatch, state, removed):
-    import json
-
     calls = []
     labels = {'snippet-sentinel.namespace': 'namespace', 'snippet-sentinel.owner': '123:old'}
 
@@ -77,5 +76,35 @@ def test_only_definitely_dead_owners_are_reaped(monkeypatch, state, removed):
     monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', fake_run)
     monkeypatch.setattr('snippet_sentinel.runner.owner_namespace', lambda: 'namespace')
     monkeypatch.setattr(Path, 'read_text', fake_read)
+    cleanup_stale()
+    assert (['docker', 'rm', '-f', 'sandbox'] in calls) == removed
+
+
+@pytest.mark.parametrize('state,removed', [('gone', True), ('live', False), ('denied', False), ('io', False),
+                                          ('reused', True), ('unknown', False), ('foreign', False)])
+def test_portable_same_host_cleanup(monkeypatch, state, removed):
+    calls = []
+    labels = {'snippet-sentinel.namespace': 'host:other' if state == 'foreign' else 'host:mac',
+              'snippet-sentinel.owner': '123:ps-Thu Nov 19 02:00:00 2026'}
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        output = 'sandbox\n' if args[1] == 'ps' else json.dumps(labels) if args[1] == 'inspect' else ''
+        return subprocess.CompletedProcess(args, 0, output, '')
+
+    def fake_kill(pid, sig):
+        assert (pid, sig) == (123, 0)
+        assert state != 'foreign'
+        if state == 'gone':
+            raise ProcessLookupError()
+        if state == 'denied':
+            raise PermissionError()
+        if state == 'io':
+            raise OSError('unknown')
+
+    monkeypatch.setattr('snippet_sentinel.runner.owner_namespace', lambda: 'host:mac')
+    monkeypatch.setattr('snippet_sentinel.runner.portable_start', lambda pid: '' if state == 'unknown' else 'new' if state == 'reused' else 'Thu Nov 19 02:00:00 2026')
+    monkeypatch.setattr('snippet_sentinel.runner.os.kill', fake_kill)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', fake_run)
     cleanup_stale()
     assert (['docker', 'rm', '-f', 'sandbox'] in calls) == removed
