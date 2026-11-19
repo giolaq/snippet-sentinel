@@ -49,3 +49,33 @@ def test_installed_console_script_is_on_path():
     result = run(Snippet('black', 'a.md', 1, 'python', "import subprocess\nimport black\nsubprocess.run(['black','--version'],check=True)"), timeout=45)
     assert result['status'] == 'pass', result
     assert 'black,' in result['stderr']
+
+
+@pytest.mark.parametrize('state,removed', [('permission', False), ('io', False), ('malformed', False), ('gone', True), ('mismatch', True), ('live', False)])
+def test_only_definitely_dead_owners_are_reaped(monkeypatch, state, removed):
+    import json
+
+    calls = []
+    labels = {'snippet-sentinel.namespace': 'namespace', 'snippet-sentinel.owner': '123:old'}
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        output = 'sandbox\n' if args[1] == 'ps' else json.dumps(labels) if args[1] == 'inspect' else ''
+        return subprocess.CompletedProcess(args, 0, output, '')
+
+    def fake_read(path, *args, **kwargs):
+        if state == 'permission':
+            raise PermissionError(str(path))
+        if state == 'io':
+            raise OSError('unreadable')
+        if state == 'gone':
+            raise FileNotFoundError(str(path))
+        if state == 'malformed':
+            return 'unknown'
+        return '123 (owner) ' + ' '.join(['S'] * 19 + ['old' if state == 'live' else 'new'])
+
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', fake_run)
+    monkeypatch.setattr('snippet_sentinel.runner.owner_namespace', lambda: 'namespace')
+    monkeypatch.setattr(Path, 'read_text', fake_read)
+    cleanup_stale()
+    assert (['docker', 'rm', '-f', 'sandbox'] in calls) == removed

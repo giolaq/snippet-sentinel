@@ -319,8 +319,10 @@ def _cleanup_stale():
             try:
                 pid, started = labels.get('snippet-sentinel.owner', '').split(':')
                 live = Path(f'/proc/{int(pid)}/stat').read_text().rsplit(')', 1)[1].split()[19] == started
-            except (ValueError, OSError, IndexError):
+            except FileNotFoundError:
                 live = False
+            except (ValueError, OSError, IndexError):
+                live = True
         elif labels.get('snippet-sentinel.owner-container'):
             parent = subprocess.run(['docker', 'inspect', '-f', '{{.State.Running}}', labels['snippet-sentinel.owner-container']],
                                     capture_output=True, text=True, timeout=10)
