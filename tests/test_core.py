@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from snippet_sentinel.classifier import classify
 from snippet_sentinel.dependencies import script_name, dependencies, is_esm, pinned
-from snippet_sentinel.extractor import extract
+from snippet_sentinel.extractor import extract, javascript_fragment
 from snippet_sentinel.extractor import Snippet
 from snippet_sentinel.runner import InfrastructureError, documented_failure, run
 from snippet_sentinel.scan import github_url, scan
@@ -176,6 +176,16 @@ def test_classifier(message, code, expected):
     ('ReferenceError: client is not defined', 1, '/* const client = new Client(); */\nclient.request();', 'needs_context'),
     ('ReferenceError: client is not defined', 1, "const url = 'https://x'; const client = 1;\n{ }\nclient.go();", 'runtime_error'),
     ('ReferenceError: client is not defined', 1, "log('const client = 1');\nclient.go();", 'needs_context'),
+    ('ReferenceError: run is not defined', 1, "for await (const [content, snapshot] of run.events('x')) {}", 'needs_context'),
+    ('ReferenceError: require is not defined in ES module scope, you can use import instead', 1, "require('x');", 'runtime_error'),
+    ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/components/EmailTemplate' imported from /work/snippet.jsx", 1, '', 'needs_context'),
+    ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module './util.js' imported from /tmp/x/snippet.mjs", 1, '', 'needs_context'),
+    ("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'ws' imported from /work/node_modules/openai/ws.mjs", 1, '', 'missing_dependency'),
+    ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/work/node_modules/openai/missing' imported from /work/snippet.mjs", 1, '', 'missing_dependency'),
+    ("StripeAPIError: Invalid JSON received from the Stripe API\n  SyntaxError: Unexpected token '<', \"<!doctype \"... is not valid JSON", 1, '', 'runtime_error'),
+    ("Error: Missing Azure OpenAI configuration", 1, "const e = process.env['AZURE_OPENAI_ENDPOINT'];\nif (!e) throw new Error('Missing Azure OpenAI configuration');", 'needs_credentials'),
+    ("Error: Missing Azure OpenAI configuration", 1, "throw new Error('Missing Azure OpenAI configuration');", 'runtime_error'),
+    ('OpenAIError: Must provide one of the `baseURL` or `endpoint` arguments, or the `AZURE_OPENAI_ENDPOINT` environment variable', 1, '', 'needs_credentials'),
 ])
 def test_javascript_verdicts(stderr, exit_code, code, expected):
     assert classify(stderr, exit_code, code=code) == expected
@@ -497,3 +507,24 @@ def test_docker_versions():
     result = run(snippet, pins=['requests==2.32.3'])
     assert result['status'] == 'pass'
     assert result['versions']['requests'] == '2.32.3'
+
+
+@pytest.mark.parametrize('code,expected', [
+    ("// Before\nconst c = Stripe('k');\n\n// After\nconst c = new Stripe('k');", 'before/after comparison'),
+    ("import Stripe from 'npm:stripe';", 'Deno-only import'),
+    ("import Stripe from 'stripe'; // Deno: import Stripe from 'npm:stripe';\nconst u = 'https://x';", ''),
+    ("// \u274c Before (v22.0.0)\nconst t = {};\n\n// \u2705 After (v22.1.2+)\nconst t = {};", 'before/after comparison'),
+    (".on('event', (event: AssistantStreamEvent) => ...)", 'method-chain fragment'),
+    ("await .finalMessages() : Promise<Message[]>", 'method-chain fragment'),
+    ("await resend.emails.send({ ... });", 'placeholder ellipsis'),
+    ("messages: [{ role: 'user', content: '\u2026' }],\nrun(\u2026);", 'placeholder ellipsis'),
+    ("const all = [...items, ...more];\nf(...args);", ''),
+    ("const m = 'abc'.match(/(...)/);\nconst n = /[...]/.test('.');", ''),
+    ("const avg = sum(...) / count;", 'placeholder ellipsis'),
+    ("const el = <Email {...} />;", 'placeholder ellipsis'),
+    ("console.log('Loading\u2026 ...)');", ''),
+    ("const url = 'https://example.com'; // before and after", ''),
+    ("client.chat.completions\n  .create({ model: 'x' });", ''),
+])
+def test_javascript_fragment(code, expected):
+    assert javascript_fragment(code) == expected

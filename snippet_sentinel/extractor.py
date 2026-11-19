@@ -74,6 +74,23 @@ def expected_error(lines, end):
     return error['name'] if error else ''
 
 
+def javascript_fragment(code):
+    """Docs blocks that are illustrations rather than programs; running them only reports noise."""
+    bare = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/''', '""', code, flags=re.S)
+    if re.search(r'^\s*//[^\w\n]*before\b', code, re.I | re.M) and re.search(r'^\s*//[^\w\n]*after\b', code, re.I | re.M):
+        return 'before/after comparison'
+    uncommented = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/|//[^\n]*''',
+                         lambda m: m.group(0) if m.group(1) else '', code, flags=re.S)
+    if re.search(r'''\bfrom\s*['"](?:npm|jsr):|\bimport\s*\(\s*['"](?:npm|jsr):''', uncommented):
+        return 'Deno-only import'
+    first = next((line for line in bare.splitlines() if line.strip() and not line.lstrip().startswith('//')), '')
+    if re.match(r'\s*(?:await\s+)?\.[A-Za-z_$]', first):
+        return 'method-chain fragment'
+    if re.search(r'\u2026|\.\.\.\s*[)\]},](?!/)', re.sub(r'//[^\n]*', '', bare)):
+        return 'placeholder ellipsis'
+    return ''
+
+
 def extract(root):
     snippets, stats = [], {'unsupported': 0}
     root = Path(root)
@@ -146,6 +163,8 @@ def extract(root):
                         and body[node.lineno - 1].strip() == '...' for node in ast.walk(ast.parse(code))
                     ):
                         reason = 'placeholder ellipsis'
+                elif lang != 'python':
+                    reason = javascript_fragment(code)
                 if scope and (not reason or transcript):
                     python_bindings.update(symbol.get_name() for symbol in scope.get_symbols()
                                            if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace())
