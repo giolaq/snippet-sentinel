@@ -172,6 +172,22 @@ def test_cli_infrastructure_error(tmp_path, monkeypatch, capsys):
     assert 'Docker daemon unavailable' in capsys.readouterr().err
 
 
+@pytest.mark.parametrize('url', ['', 'not a URL', 'https://example.com/a', '\"><script>alert(1)</script>'])
+def test_invalid_scan_form_retains_value(tmp_path, url):
+    from html import escape
+
+    db = tmp_path / 'scan.db'
+    client = TestClient(create_app(db))
+    response = client.post('/scan', data={'url': url})
+    assert response.status_code == 400
+    assert response.headers['content-type'].startswith('text/html')
+    assert 'role="alert"' in response.text
+    assert 'HTTPS GitHub repository URL' in response.text
+    assert f'value="{escape(url)}"' in response.text
+    assert '<script>' not in response.text
+    assert Store(db).leaderboard() == []
+
+
 def test_indented_fence(tmp_path):
     (tmp_path / 'a.md').write_text('  ```python\n  print(1)\n  ```\n')
     assert extract(tmp_path)[0][0].code == 'print(1)'

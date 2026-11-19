@@ -27,10 +27,12 @@ def create_app(db='sentinel.db'):
     @app.post('/scan')
     async def start(request: Request, background: BackgroundTasks):
         form = parse_qs((await request.body()).decode())
+        entered_url = form.get('url', [''])[0]
         try:
-            url = github_url(form.get('url', [''])[0])
+            url = github_url(entered_url)
         except ValueError as exc:
-            raise HTTPException(400, str(exc))
+            return HTMLResponse(templates.get_template('home.html').render(
+                runs=store.leaderboard(), error=str(exc), entered_url=entered_url), status_code=400)
         run_id = store.start(url)
 
         def work():
