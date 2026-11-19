@@ -54,7 +54,7 @@ def missing_placeholder_path(code, message, frames):
     return ''
 
 
-PLACEHOLDER_HOST = re.compile(r'''(?:https?://|['"])((?:[\w-]+\.)*example\.(?:com|org|net))\b''')
+PLACEHOLDER_HOST = re.compile(r'''(?:https?://|['"])((?:[\w-]+\.)*example\.(?:com|org|net))(?![\w-]|\.\w)''')
 
 
 def javascript_placeholder(code, error):

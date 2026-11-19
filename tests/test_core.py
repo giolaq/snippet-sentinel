@@ -549,6 +549,7 @@ def test_javascript_fragment(code, expected):
     ("new Stripe('sk', {host: 'example.com'});", 'StripeAPIError: Invalid JSON received from the Stripe API', 'requires replacing the placeholder host: example.com'),
     ("await fetch('https://example.com/a');", 'TypeError: x is not a function', ''),
     ("await fetch('https://api.real.dev/a');", 'Error: Download failed: 404', ''),
+    ("await fetch('https://example.com.au/a');", 'Error: Download failed: 404', ''),
 ])
 def test_javascript_placeholder(code, error, expected):
     assert javascript_placeholder(code, error) == expected
