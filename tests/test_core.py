@@ -188,6 +188,7 @@ def test_classifier(message, code, expected):
     ("Error: Missing Azure OpenAI configuration", 1, "throw new Error('Missing Azure OpenAI configuration');", 'runtime_error'),
     ('TypeError: Failed to parse URL from /api/responses', 1, "await fetch('/api/responses');", 'needs_context'),
     ('WebRTCError: WebRTC requires a browser with RTCPeerConnection.', 1, '', 'needs_context'),
+    ("node:internal/deps/undici:1\n[TypeError: Failed to parse URL from /api/responses] {\n  [cause]: TypeError: Invalid URL\n}", 1, "await fetch('/api/responses');", 'needs_context'),
     ('SubjectTokenProviderError: Failed to read Kubernetes service account token from /var/run/secrets/token: ENOENT', 1, '', 'needs_credentials'),
     ("TypeError: Cannot read properties of undefined (reading 'href')", 1, 'new Agent(process.env.PROXY_URL);', 'needs_credentials'),
     ("TypeError: Cannot read properties of undefined (reading 'href')", 1, 'new Agent(config.url);', 'runtime_error'),

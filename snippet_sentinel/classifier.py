@@ -63,12 +63,13 @@ def browser_only(stderr):
     return match and (f'Fetches the page-relative URL `{match.group(1)}`' if match.group(1) else 'Needs a browser')
 
 
-def context_reason(stderr, code):
+def context_reason(output, code):
+    stderr = error_summary(output)
     if name := undefined_name(stderr, code):
         return f'Uses `{name}` without defining it: likely continues an earlier example or expects a browser page.'
     if path := local_import(stderr):
         return f'Imports `{path}` from the reader\'s own project.'
-    if browser := browser_only(stderr):
+    if browser := browser_only(output):
         return f'{browser}: meant to run in a web page, not Node.'
     return None
 
@@ -99,6 +100,6 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
                  r'|missing (?:environment|env) (?:variable|var)\s+[\x60\'\"]?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD|CERTIFICATE)[A-Z_]*\b'
                  r'|[\x60\'\"][A-Z][A-Z0-9_]+[\x60\'\"] environment variable\b', summary, re.I) or missing_env(summary, code):
         return 'needs_credentials'
-    if undefined_name(summary, code) or browser_only(summary):
+    if undefined_name(summary, code) or browser_only(stderr):
         return 'needs_context'
     return 'runtime_error'

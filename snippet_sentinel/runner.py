@@ -267,7 +267,7 @@ process.exit(r.status === null ? 1 : r.status);
             if reason:
                 status = 'skipped'
             elif status == 'needs_context':
-                reason = context_reason(error_summary(output), snippet.code)
+                reason = context_reason(output, snippet.code)
             result.update(status=status, reason=reason, stderr=output[-8000:], exit_code=rc)
         except OSError as exc:
             if runner == 'docker':
