@@ -237,6 +237,7 @@ def test_invalid_scan_form_retains_value(tmp_path, url):
     assert response.status_code == 400
     assert response.headers['content-type'].startswith('text/html')
     assert 'role="alert"' in response.text
+    assert 'autofocus aria-invalid="true" aria-describedby="scan-error"' in response.text
     assert 'HTTPS GitHub repository URL' in response.text
     value = re.search(r'name="url" value="([^"]*)"', response.text).group(1)
     assert unescape(value) == url
