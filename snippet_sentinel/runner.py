@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from .classifier import classify, error_summary, final_error, undefined_name
-from .dependencies import dependencies, javascript_mode, pinned, python_package
+from .dependencies import TSX, dependencies, javascript_mode, pinned, python_package, script_name
 
 QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
 ERROR_PATHS = re.compile(rf'({QUOTED_PATH})(?: -> ({QUOTED_PATH}))?')
@@ -126,7 +126,8 @@ def run(snippet, runner='docker', timeout=60, pins=()):
     specs = pinned(packages, pins, snippet.lang)
     python = snippet.lang == 'python'
     esm = javascript_mode(snippet.code) if not python else False
-    filename = 'snippet.py' if python else ('snippet.mjs' if esm else 'snippet.cjs')
+    filename = script_name(snippet.code, snippet.lang)
+    transpile = filename.endswith(('.ts', '.tsx', '.jsx'))
     name = 'sentinel-' + uuid.uuid4().hex
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='sentinel-') as directory:
@@ -134,7 +135,7 @@ def run(snippet, runner='docker', timeout=60, pins=()):
         path.joinpath(filename).write_text(snippet.code)
         # A tiny worker keeps package discovery and execution identical across backends.
         worker = '''import json, subprocess, sys
-packages, specs, python, filename = json.loads(sys.argv[1])
+packages, specs, python, filename = json.loads(sys.argv[1])[:4]
 if specs:
     install = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *specs] if python else ['npm', 'install', '--no-audit', '--no-fund', '--', *specs]
     p = subprocess.run(install, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -153,20 +154,24 @@ print('SENTINEL_VERSIONS=' + json.dumps(versions), flush=True)
 sys.exit(subprocess.call([sys.executable if python else 'node', filename]))
 '''
         path.joinpath('worker.py').write_text(worker)
-        payload = json.dumps([packages, specs, python, filename])
+        payload = json.dumps([packages, specs, python, filename, transpile, esm])
         if not python:
             js_worker = '''const {spawnSync} = require('node:child_process');
 const fs = require('node:fs');
-const [packages,specs,,filename] = JSON.parse(process.argv[2]);
-if (specs.length) {
- const p = spawnSync('npm', ['install','--no-audit','--no-fund','--',...specs], {encoding:'utf8'});
+const [packages,specs,,filename,transpile,esm] = JSON.parse(process.argv[2]);
+const installs = transpile ? [...specs, %r] : specs;
+if (transpile) fs.writeFileSync('package.json', JSON.stringify({type: esm ? 'module' : 'commonjs'}));
+if (installs.length) {
+ const p = spawnSync('npm', ['install','--no-audit','--no-fund','--',...installs], {encoding:'utf8'});
  if(p.status !== 0) { console.log('SENTINEL_INSTALL_FAILED'); console.log(p.stdout, p.stderr); process.exit(p.status || 1); }
 }
 const p = spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'});
 const deps = JSON.parse(p.stdout || '{}').dependencies || {};
 console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries(packages.filter(x=>deps[x]).map(x=>[x,deps[x].version]))));
 let r;
-if (filename.endsWith('.cjs')) {
+if (transpile) {
+ r = spawnSync('node_modules/.bin/tsx', [filename], {stdio: 'inherit'});
+} else if (filename.endsWith('.cjs')) {
  r = spawnSync('node', [filename], {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
  if (r.status !== 0 && /SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)/.test(r.stderr || '')) {
   const code = fs.readFileSync(filename, 'utf8');
@@ -182,7 +187,7 @@ if (filename.endsWith('.cjs')) {
 if (r.error) console.error(r.error);
 process.exit(r.status === null ? 1 : r.status);
 '''
-            path.joinpath('worker.cjs').write_text(js_worker)
+            path.joinpath('worker.cjs').write_text(js_worker % TSX)
         try:
             if runner == 'docker':
                 # Copy instead of bind mounting: works with the dashboard's socket mount.

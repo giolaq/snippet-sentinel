@@ -33,7 +33,7 @@ When Docker is unavailable, explicitly select `--runner local`. **This executes 
 
 ## Extraction and results
 
-Scans `.md`, `.mdx` and `.markdown`, excluding `.git`, `node_modules` and `vendor`. Backtick and tilde fences, including indented fences, are supported. JS aliases (`js`, `javascript`, `jsx`, `mjs`, `cjs`, `node`) and Python aliases (`py`, `python`, `python3`) normalize automatically. TypeScript is counted as unsupported; other languages are ignored.
+Scans `.md`, `.mdx` and `.markdown`, excluding `.git`, `node_modules` and `vendor`. Backtick and tilde fences, including indented fences, are supported. JS aliases (`js`, `javascript`, `jsx`, `mjs`, `cjs`, `node`) and Python aliases (`py`, `python`, `python3`) normalize automatically. TypeScript aliases (`ts`, `typescript`, `tsx`, `mts`, `cts`) normalize to `typescript`. TypeScript, and JavaScript that contains JSX, run through [tsx](https://tsx.is) (esbuild, pinned to tsx@4.23.15) instead of plain `node`, so type-only imports are elided the way `tsc` does and no type checking happens; other languages are ignored.
 
 Opt out with a standalone `skip`, `norun` or `no-run` fence flag, a `test="skip"` or `run="skip"` attribute, or `<!-- sentinel:skip -->` on the line immediately above the fence. Lint-only exclusions do not opt out of execution. Shell-only Python fences, Python REPL transcripts (`pycon` or `>>>`) and standalone `...` / `// ...` placeholders are skipped. A Python failure that refers to a missing name defined in an earlier fence in the same file can be skipped as a fragment; earlier code is not executed or injected. If a failing example reproduces the exception type from an immediately following `output` fence, it is skipped as a documented error. Snippets are identified by a hash of relative path, language and code, so line movement preserves history; edits or path moves start new history.
 
@@ -54,9 +54,9 @@ Compose persists SQLite and mounts the Docker socket so scans can launch sibling
 
 ## Limitations / roadmap
 
-Samples run independently: no shared setup, relative files, interactive input or project context. Regex-based JS dependency/ESM detection can misread comments and strings; dynamic imports and Python dynamic imports may be missed. JSX aliases are recognized but no transpilation is provided. Python stdlib detection uses the host interpreter's module list. GitHub URLs must point to repository roots; `--ref` supports branch/tag, not arbitrary detached SHA. Identical blocks within one file share an identity. Background progress is run-level (not per-snippet); restarting the server interrupts scans. A large repo can produce many containers; `--jobs` controls concurrency. Errors may contain sensitive sample output: protect the database and reports.
+Samples run independently: no shared setup, relative files, interactive input or project context. Regex-based JS dependency/ESM detection can misread comments and strings; dynamic imports and Python dynamic imports may be missed. TypeScript and JSX are transpiled with esbuild via tsx, not type-checked. Python stdlib detection uses the host interpreter's module list. GitHub URLs must point to repository roots; `--ref` supports branch/tag, not arbitrary detached SHA. Identical blocks within one file share an identity. Background progress is run-level (not per-snippet); restarting the server interrupts scans. A large repo can produce many containers; `--jobs` controls concurrency. Errors may contain sensitive sample output: protect the database and reports.
 
-Next: GitHub App integration, TypeScript, more languages, durable scan queues, dependency lockfiles and stronger worker isolation.
+Next: GitHub App integration, TypeScript type checking, more languages, durable scan queues, dependency lockfiles and stronger worker isolation.
 
 ## Verified auto-fix PRs
 

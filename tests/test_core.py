@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from snippet_sentinel.classifier import classify
-from snippet_sentinel.dependencies import dependencies, is_esm, pinned
+from snippet_sentinel.dependencies import script_name, dependencies, is_esm, pinned
 from snippet_sentinel.extractor import extract
 from snippet_sentinel.extractor import Snippet
 from snippet_sentinel.runner import InfrastructureError, documented_failure, run
@@ -21,10 +21,11 @@ def test_extract(tmp_path):
     (tmp_path / 'vendor').mkdir()
     (tmp_path / 'vendor/x.md').write_text('```py\nx\n```')
     snippets, stats = extract(tmp_path)
-    assert len(snippets) == 5
+    assert len(snippets) == 6
     assert snippets[0].line == 2 and snippets[0].lang == 'python'
-    assert all(s.reason for s in snippets[1:])
-    assert stats == {'unsupported': 1}
+    assert snippets[1].lang == 'typescript' and not snippets[1].reason
+    assert all(s.reason for s in snippets[2:])
+    assert stats == {'unsupported': 0}
     assert extract(tmp_path)[0][0].id == snippets[0].id
     assert extract(tmp_path / 'vendor' / 'absent') == ([], {'unsupported': 0})
 
@@ -86,6 +87,35 @@ def test_python_pin_with_extras():
 ])
 def test_javascript_module_mode(code, esm):
     assert is_esm(code) is esm
+
+
+@pytest.mark.parametrize('runner', ['local', pytest.param('docker', marks=[pytest.mark.docker, pytest.mark.skipif(not __import__('os').environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')])])
+@pytest.mark.parametrize('lang,code,expected', [
+    ('typescript', "const value: number = 1;\nconsole.log(value);", 'pass'),
+    ('typescript', "enum Color { Red }\ninterface P { c: Color }\nconst p: P = { c: Color.Red };\nawait Promise.resolve(p);", 'pass'),
+    ('typescript', "import { strict as assert } from 'node:assert';\nimport type { Stats } from 'node:fs';\nimport { Dirent } from 'node:fs';\nlet d: Dirent | undefined;\nassert.equal(d, undefined);", 'pass'),
+    ('typescript', "const fs = require('node:fs');\nconst n: number = fs.constants.F_OK;", 'pass'),
+    ('typescript', "const value: number = ;", 'syntax_error'),
+    ('typescript', "const p = (x: number) => x;\np(1).toFixed(2).missing();", 'runtime_error'),
+    ('javascript', "const React = { createElement: () => ({}) };\nconsole.log(<b>hi</b>, <br />);", 'pass'),
+])
+def test_typescript_and_jsx_execution(lang, code, expected, runner):
+    if runner == 'local' and not shutil.which('node'):
+        pytest.skip('Local Node required')
+    result = run(Snippet('ts', 'a.md', 1, lang, code), runner)
+    assert result['status'] == expected, result['stderr']
+    assert 'tsx' not in result['versions']
+
+
+@pytest.mark.parametrize('code,lang,expected', [
+    ('const x: number = 1;', 'typescript', 'snippet.ts'),
+    ("import x from 'y';\nconst el = <App />;", 'typescript', 'snippet.tsx'),
+    ('const el = <p>hi</p>;', 'javascript', 'snippet.jsx'),
+    ("const ok = 1 < 2 && 3 > 2;", 'javascript', 'snippet.mjs'),
+    ("import x from 'y';", 'javascript', 'snippet.mjs'),
+])
+def test_script_name(code, lang, expected):
+    assert script_name(code, lang) == expected
 
 
 @pytest.mark.parametrize('runner', ['local', pytest.param('docker', marks=[pytest.mark.docker, pytest.mark.skipif(not __import__('os').environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')])])
@@ -185,7 +215,7 @@ def test_local_demo(tmp_path):
     assert run['counts']['runtime_error'] >= 1
     assert run['counts']['needs_credentials'] >= 1
     if shutil.which('node') and shutil.which('npm'):
-        assert run['counts'] == {'pass': 2, 'syntax_error': 2, 'missing_dependency': 2, 'runtime_error': 2, 'needs_credentials': 2, 'skipped': 5}
+        assert run['counts'] == {'pass': 3, 'syntax_error': 2, 'missing_dependency': 2, 'runtime_error': 2, 'needs_credentials': 2, 'skipped': 5}
     assert 'UNSANDBOXED' in render_run(run, static=True)
 
 

@@ -33,7 +33,6 @@
   </div>
   <p class="note">Broken means a syntax, dependency, runtime, or timeout error in this scan. Skipped snippets and those needing credentials or earlier example context are excluded from the percentage.</p>
   <div class="meta">{% for name,info in verdicts.items() if run.counts.get(name, 0) %}<span class="badge {% if name in broken_statuses %}broken{% elif name == 'pass' %}passed{% else %}excluded{% endif %}">{{ info[0] }} · {{ run.counts[name] }}</span>{% endfor %}</div>
-  {% if run.stats.get('unsupported', 0) %}<p class="note">{{ run.stats.unsupported }} TypeScript block{{ '' if run.stats.unsupported == 1 else 's' }} not checked: TypeScript is not supported yet.</p>{% endif %}
   <details class="verdict-key"><summary>What do the verdicts mean?</summary><dl>{% for name,info in verdicts.items() %}<dt>{{ info[0] }}{% if name in broken_statuses %} · broken{% endif %}</dt><dd>{{ info[1] }}</dd>{% endfor %}</dl><p class="note">Examples run independently without shared setup or project context. A failed check may need investigation, not a change to the SDK.</p></details>
   {% if not static %}
   <form method="get"><label>Show snippets<select name="status"><option value="">All verdicts</option><option value="broken" {% if status == 'broken' %}selected{% endif %}>Broken only</option>{% for name,info in verdicts.items() if run.counts.get(name, 0) %}<option value="{{ name }}" {% if status == name %}selected{% endif %}>{{ info[0] }} ({{ run.counts[name] }})</option>{% endfor %}</select></label><button>Apply filter</button>{% if status %}<a href="/runs/{{ run.id }}">Clear filter</a>{% endif %}</form>
@@ -43,7 +42,7 @@
 {% set broken = s.status in broken_statuses %}
 {% set verdict = verdicts.get(s.status, ('Unknown verdict', 'No explanation available.')) %}
 <article class="snippet {% if broken %}broken{% elif s.status == 'pass' %}passed{% endif %}">
-  <div class="meta"><span class="badge {% if broken %}broken{% elif s.status == 'pass' %}passed{% else %}excluded{% endif %}">{% if broken %}Broken · {% endif %}{{ verdict[0] }}</span><span class="badge">{{ 'Python' if s.lang == 'python' else 'JavaScript' }}</span><span class="badge">{% if s.runner == 'local' %}Local · UNSANDBOXED{% else %}Docker{% endif %}</span></div>
+  <div class="meta"><span class="badge {% if broken %}broken{% elif s.status == 'pass' %}passed{% else %}excluded{% endif %}">{% if broken %}Broken · {% endif %}{{ verdict[0] }}</span><span class="badge">{{ {'python': 'Python', 'typescript': 'TypeScript'}.get(s.lang, 'JavaScript') }}</span><span class="badge">{% if s.runner == 'local' %}Local · UNSANDBOXED{% else %}Docker{% endif %}</span></div>
   <div class="source">
     <h2>{{ s.file }} · line {{ s.line }}</h2>
     {% if run.repo_url and run.ref %}<p><a href="{{ run.repo_url }}/blob/{{ run.ref|urlencode }}/{{ s.file|urlpath }}{% if s.file.lower().endswith(('.md', '.mdx', '.markdown')) %}?plain=1{% endif %}#L{{ s.line }}">View source on GitHub ↗</a> · pinned to scanned commit {{ run.ref[:7] }}</p>{% elif run.repo_url %}<p class="note">No source link: this scan did not record a commit.</p>{% else %}<p class="note">Local file · open this path at line {{ s.line }} in your copy of {{ run.repo_name }}.</p>{% endif %}
@@ -55,6 +54,6 @@
   <p class="packages"><span class="muted">Exit code: {{ s.exit_code if s.exit_code is not none else 'Not available' }} · Recorded package versions:</span> {{ packages(s.versions) }}</p>
   {% if s.broken_since %}<p class="note">Failing since <time datetime="{{ s.broken_since.started }}">{{ s.broken_since.started|readable_date }}</time> · {% if not static %}<a href="/runs/{{ s.broken_since.run_id }}">scan #{{ s.broken_since.run_id }}</a>{% else %}scan #{{ s.broken_since.run_id }}{% endif %} (first observed in this failing streak).</p><p class="packages"><span class="muted">Package versions at first failure:</span> {{ packages(s.broken_since.versions) }}</p>{% endif %}
 </article>
-{% else %}<div class="empty"><h2>{% if status %}No snippets match this filter{% else %}No supported snippets found{% endif %}</h2><p class="muted">{% if status %}Choose another verdict or clear the filter to see all snippets.{% else %}This scan found no Python or JavaScript examples to display.{% endif %}</p></div>{% endfor %}
+{% else %}<div class="empty"><h2>{% if status %}No snippets match this filter{% else %}No supported snippets found{% endif %}</h2><p class="muted">{% if status %}Choose another verdict or clear the filter to see all snippets.{% else %}This scan found no Python, JavaScript or TypeScript examples to display.{% endif %}</p></div>{% endfor %}
 {% endif %}
 {% endblock %}

@@ -59,7 +59,7 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
     summary = error_summary(stderr)
     if re.search(r'does not provide an export named', summary):
         return 'runtime_error'
-    if re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token', summary, re.I):
+    if re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token|Transform failed', summary, re.I):
         return 'syntax_error'
     if re.search(r'ModuleNotFoundError|No module named|Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND', summary, re.I):
         return 'missing_dependency'
