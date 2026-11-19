@@ -24,8 +24,8 @@
 </section>
 <details class="scan-panel" {% if error or not runs %}open{% endif %}>
   <summary>Scan a GitHub repository</summary>
-  <p class="muted">Add a public repository to the leaderboard. Python and JavaScript examples run in Docker; scans may take several minutes.</p>
+  <p class="muted">Add a public repository to the leaderboard. Up to {{ max_snippets }} Python and JavaScript examples run in Docker; scans may take several minutes. An identical pending URL and ref reuses its existing scan.</p>
   {% if error %}<p id="scan-error" class="error" role="alert">{{ error }}</p>{% endif %}
-  <form action="/scan" method="post"><label class="url-field">GitHub repository URL<input type="url" name="url" value="{{ entered_url|default('') }}" placeholder="https://github.com/owner/repo" required {% if error %}autofocus aria-invalid="true" aria-describedby="scan-error"{% endif %}></label><button>Start scan →</button></form>
+  <form action="/scan" method="post"><label class="url-field">GitHub repository URL<input type="url" name="url" value="{{ entered_url|default('') }}" placeholder="https://github.com/owner/repo" required {% if error %}autofocus aria-invalid="true" aria-describedby="scan-error"{% endif %}></label><label>Branch or tag (optional)<input name="ref" value="{{ entered_ref|default('') }}" placeholder="Default branch"></label><button>Start scan →</button></form>
 </details>
 {% endblock %}

@@ -26,6 +26,7 @@
 <pre>{{ fix.diff or 'No change proposed' }}</pre>{% if fix.output %}<pre>{{ fix.output }}</pre>{% endif %}{% endfor %}</section>{% endif %}{% endif %}
 <section aria-labelledby="results-heading">
   <div class="section-heading"><h2 id="results-heading">Scan results</h2><p class="note">Failures shown first</p></div>
+  {% if run.stats.get('truncated', 0) %}<p class="note" role="status">Partial scan: checked the first {{ run.stats.selected }} of {{ run.stats.found }} snippets (limit {{ run.stats.max_snippets }}); {{ run.stats.truncated }} omitted. Percentages cover only the selected snippets. Use the CLI with --max-snippets 0 for an unlimited scan.</p>{% endif %}
   <div class="summary-grid">
     <div><strong {% if run.broken %}class="error"{% endif %}>{% if run.runnable %}{{ '%.1f'|format(run.percent) }}%{% else %}Not evaluated{% endif %}</strong><span>broken share</span></div>
     <div><strong>{{ run.broken }} / {{ run.runnable }}</strong><span>broken / checked snippets</span></div>

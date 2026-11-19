@@ -69,6 +69,16 @@ class Store:
         with self.connect() as db:
             return db.execute('INSERT INTO runs(repo,ref,started) VALUES(?,?,?)', (repo, ref, now())).lastrowid
 
+    def start_or_reuse(self, repo, ref=''):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            pending = db.execute('SELECT id FROM runs WHERE repo=? COLLATE NOCASE AND ref=? AND finished IS NULL ORDER BY id LIMIT 1',
+                                 (repo, ref)).fetchone()
+            if pending:
+                return pending['id'], False
+            run_id = db.execute('INSERT INTO runs(repo,ref,started) VALUES(?,?,?)', (repo, ref, now())).lastrowid
+            return run_id, True
+
     def finish(self, run_id, results, stats, ref='', error=''):
         counts = {}
         for result in results:
