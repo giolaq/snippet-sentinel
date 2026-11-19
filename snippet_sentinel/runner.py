@@ -19,6 +19,32 @@ class InfrastructureError(RuntimeError):
     pass
 
 
+def missing_placeholder_path(code, message, frames):
+    _, separator, filename = message.partition(': ')
+    if separator:
+        try:
+            path = ast.literal_eval(filename)
+        except (SyntaxError, ValueError):
+            return ''
+        return path if isinstance(path, str) and path.startswith('/path/to/') else ''
+    if not frames or not frames[-1][0].endswith('/ssl.py'):
+        return ''
+    lines = [int(line) for file, line in frames if file.endswith('/snippet.py')]
+    if not lines:
+        return ''
+    calls = [node for node in ast.walk(ast.parse(code)) if isinstance(node, ast.Call)
+             and node.lineno <= lines[-1] <= node.end_lineno]
+    if len(calls) != 1 or ast.unparse(calls[0].func) != 'ssl.create_default_context':
+        return ''
+    keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+    cafile = keywords.get('cafile')
+    if not keywords.keys() & {None, 'capath', 'cadata'} and isinstance(cafile, ast.Constant):
+        path = cafile.value
+        if isinstance(path, str) and path.startswith('/path/to/'):
+            return path
+    return ''
+
+
 def documented_failure(snippet, status, output):
     if status not in {'syntax_error', 'runtime_error', 'missing_dependency', 'needs_credentials', 'needs_context'}:
         return ''
@@ -42,13 +68,9 @@ def documented_failure(snippet, status, output):
     if name == 'SyntaxError' and message == "'await' outside function" and snippet.context_names:
         return 'async fragment requiring earlier setup: ' + ', '.join(snippet.context_names)
     if name == 'FileNotFoundError' and snippet.lang == 'python':
-        lines = [line for file, line in frames if file.endswith('/snippet.py')]
-        if lines:
-            line = int(lines[-1])
-            for node in ast.walk(ast.parse(snippet.code)):
-                if (isinstance(node, ast.Constant) and node.lineno == line and isinstance(node.value, str)
-                        and node.value.startswith('/path/to/') and (': ' not in message or node.value in message)):
-                    return f'requires replacing the placeholder path: {node.value}'
+        path = missing_placeholder_path(snippet.code, message, frames)
+        if path:
+            return f'requires replacing the placeholder path: {path}'
     return ''
 
 
