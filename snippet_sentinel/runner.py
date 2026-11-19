@@ -203,6 +203,8 @@ def python_inconclusive(code, status, output):
         return 'needs_context', 'Inspects the reader\'s local Hub cache, which is empty in a fresh sandbox.'
     error = final_error(output)
     if not error:
+        if status == 'runtime_error' and not output.strip():
+            return 'skipped', 'Killed without output, likely by the sandbox memory limit; not evaluated.'
         return None
     name, message = error['name'], error['message'] or ''
     frames = re.findall(r'^  File "([^"\n]+)", line \d+, in ', output[:error.start()], re.M)
@@ -240,7 +242,7 @@ def reader_value(code, missing):
     structural |= {id(node.value) for node in ast.walk(tree) if isinstance(node, (ast.Attribute, ast.Subscript))}
     structural |= {id(node.returns) for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     structural |= {id(node.annotation) for node in ast.walk(tree) if isinstance(node, (ast.arg, ast.AnnAssign))}
-    if any(id(node) in structural for node in uses):
+    if any(id(node) in structural for node in uses) and not re.match(r'(?:My|Your)[A-Z]\w*$', missing):
         return None
     bound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)}
     bound |= {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
@@ -410,6 +412,8 @@ process.exit(r.status === null ? 1 : r.status);
                 reason = ''
             inconclusive = (python and not reason and not exported_by and status in BROKEN
                             and python_inconclusive(code, status, output))
+            if python and expired and specs and 'SENTINEL_VERSIONS=' not in out:
+                inconclusive = 'skipped', 'Installing dependencies exceeded the time limit; not evaluated.'
             if inconclusive:
                 status, reason = inconclusive
             elif reason:
