@@ -18,7 +18,36 @@ class Store:
                 counts TEXT, stats TEXT, error TEXT);
                 CREATE TABLE IF NOT EXISTS results (
                 id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES runs(id), snippet_id TEXT, data TEXT);
-                CREATE INDEX IF NOT EXISTS results_run ON results(run_id);''')
+                CREATE INDEX IF NOT EXISTS results_run ON results(run_id);
+                CREATE TABLE IF NOT EXISTS fix_jobs (
+                run_id INTEGER PRIMARY KEY REFERENCES runs(id), status TEXT, pr_url TEXT DEFAULT '', error TEXT DEFAULT '');
+                CREATE TABLE IF NOT EXISTS fixes (
+                id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES runs(id), data TEXT);''')
+
+    def ensure_fix_job(self, run_id):
+        with self.connect() as db:
+            return db.execute("INSERT OR IGNORE INTO fix_jobs(run_id,status) VALUES(?, 'pending')", (run_id,)).rowcount == 1
+
+    def update_fix_job(self, run_id, **fields):
+        if not fields or not set(fields) <= {'status', 'pr_url', 'error'}:
+            raise ValueError('Invalid fix job fields')
+        with self.connect() as db:
+            db.execute('UPDATE fix_jobs SET ' + ','.join(k + '=?' for k in fields) + ' WHERE run_id=?', (*fields.values(), run_id))
+
+    def save_fix(self, run_id, fix):
+        with self.connect() as db:
+            db.execute('INSERT INTO fixes(run_id,data) VALUES(?,?)', (run_id, json.dumps(fix)))
+
+    def claim_fix_pr(self, run_id):
+        with self.connect() as db:
+            return db.execute("UPDATE fix_jobs SET status='running',error='' WHERE run_id=? AND status IN ('done','error') AND pr_url=''", (run_id,)).rowcount == 1
+
+    def fix_job(self, run_id):
+        with self.connect() as db:
+            row = db.execute('SELECT * FROM fix_jobs WHERE run_id=?', (run_id,)).fetchone()
+            if not row:
+                return None
+            return {**dict(row), 'results': [json.loads(r['data']) for r in db.execute('SELECT data FROM fixes WHERE run_id=? ORDER BY id', (run_id,))]}
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)

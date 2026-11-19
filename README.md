@@ -56,4 +56,18 @@ Compose persists SQLite and mounts the Docker socket so scans can launch sibling
 
 Samples run independently: no shared setup, relative files, interactive input or project context. Regex-based JS dependency/ESM detection can misread comments and strings; dynamic imports and Python dynamic imports may be missed. JSX aliases are recognized but no transpilation is provided. Python stdlib detection uses the host interpreter's module list. GitHub URLs must point to repository roots; `--ref` supports branch/tag, not arbitrary detached SHA. Identical blocks within one file share an identity. Background progress is run-level (not per-snippet); restarting the server interrupts scans. A large repo can produce many containers; `--jobs` controls concurrency. Errors may contain sensitive sample output: protect the database and reports.
 
-Next: GitHub App integration, suggested fixes / auto-fix PRs, TypeScript, more languages, durable scan queues, dependency lockfiles and stronger worker isolation. **GitHub App and auto-fix PRs are not part of v1.**
+Next: GitHub App integration, TypeScript, more languages, durable scan queues, dependency lockfiles and stronger worker isolation.
+
+## Verified auto-fix PRs
+
+On a completed GitHub run, click **Propose fixes**. Offline rules handle missing stdlib/Node builtin imports, Python 2 print statements, removed collections aliases and mixed JS module modes. Each candidate runs with the same runner as the scan; only passing candidates qualify. Review the before/after diffs and verified badges, then click **Open fix PR** to publish one PR containing verified changes only. Fence bodies must still match the scanned code; mismatches are skipped and reported.
+
+Set `GITHUB_TOKEN` (or `GH_TOKEN`) with repository contents/pull-request write permissions. Push-denied (403) repositories fall back to a fork, which requires permission to create forks. PRs target the default branch, starting from the scanned commit on `sentinel/fix-<run_id>`. No token is required to propose or verify fixes. Optional `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` enables an HTTPS LLM fallback after rules fail; this sends snippet code and error tails to the provider (Anthropic takes precedence). Without keys, proposals stay offline.
+
+```sh
+snippet-sentinel scan examples/fixable-docs --runner docker
+snippet-sentinel fix <run_id> --db sentinel.db
+snippet-sentinel fix <github_run_id> --open-pr
+```
+
+Fix jobs/results persist in SQLite, but background workers are not durable across restarts. Each run has one proposal job and one PR; repeat commands return stored results. Verification does not prove semantic correctness: review every PR. Local-run verification remains UNSANDBOXED. PR publication can fail after a push; inspect the remote branch before retrying.

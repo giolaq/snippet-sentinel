@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}{{ run.repo_name }} · Scan #{{ run.id }} · Snippet Sentinel{% endblock %}
-{% block head %}{% if not run.finished and not static %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block head %}{% if (not run.finished or (run.fix_job and run.fix_job.status in ['pending','running'])) and not static %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% macro packages(versions) %}{% for package,version in versions.items() %}<code>{{ package }} {{ version }}</code>{% else %}None recorded{% endfor %}{% endmacro %}
 {% block content %}
 {% if not static %}<a class="breadcrumb" href="/">← Repository leaderboard</a>{% endif %}
