@@ -688,6 +688,8 @@ def test_python_missing_import_from_installed_package():
     ('login()', 'timeout', 'Open this URL\n    Waiting for authorization......', 'needs_credentials'),
     ('snapshot_download("big")', 'timeout', 'Fetching 1004 files:   2%| 20/1004 [00:10<\nFetching 1004 files:   5%| 50/1004 [00:40<', 'skipped'),
     ('while True: pass', 'timeout', '', None),
+    ('print(result)\nresult = 1', 'runtime_error', "NameError: name 'result' is not defined", None),
+    ('def f(client):\n    return send(x=clinet)\nf(1)', 'runtime_error', "NameError: name 'clinet' is not defined", None),
     ('scan_cache_dir()', 'runtime_error', 'huggingface_hub.errors.CacheNotFound: Cache directory not found: /root/.cache/huggingface/hub.', 'needs_context'),
 ])
 def test_python_inconclusive(code, status, output, expected):
@@ -702,3 +704,7 @@ def test_python_optional_extra_raised_inside_sdk():
     assert python_inconclusive('x()', 'missing_dependency', output)[0] == 'needs_context'
     direct = 'Traceback (most recent call last):\n  File "/work/snippet.py", line 1, in <module>\nModuleNotFoundError: No module named \'torch\''
     assert python_inconclusive('import torch', 'missing_dependency', direct) is None
+    removed = ('Traceback (most recent call last):\n  File "/work/snippet.py", line 1, in <module>\n'
+               '  File "/usr/local/lib/python3.12/site-packages/sdk/__init__.py", line 3, in <module>\n'
+               "ImportError: cannot import name 'Thing' from 'sdk.core'")
+    assert python_inconclusive('import sdk', 'runtime_error', removed) is None

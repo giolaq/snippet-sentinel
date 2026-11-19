@@ -206,8 +206,8 @@ def python_inconclusive(code, status, output):
         return None
     name, message = error['name'], error['message'] or ''
     frames = re.findall(r'^  File "([^"\n]+)", line \d+, in ', output[:error.start()], re.M)
-    if (name in {'ImportError', 'ModuleNotFoundError'} or name.endswith('MissingDependencyError')) and frames \
-            and 'site-packages' in frames[-1]:
+    if (name.endswith('MissingDependencyError') or name in {'ImportError', 'ModuleNotFoundError'}
+            and re.search(r'pip install|to be installed|install it\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
         return 'needs_context', f'The SDK needs an optional dependency the docs ask readers to install: {message[:120]}'
     if path := READER_INPUT.search(message):
         return 'needs_context', f'Needs a local file or directory the reader provides: {next(filter(None, path.groups()))}'
@@ -242,8 +242,15 @@ def reader_value(code, missing):
     structural |= {id(node.annotation) for node in ast.walk(tree) if isinstance(node, (ast.arg, ast.AnnAssign))}
     if any(id(node) in structural for node in uses):
         return None
-    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} - {missing}
-    if difflib.get_close_matches(missing, names, cutoff=.8):
+    bound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)}
+    bound |= {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
+    bound |= {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    bound |= {(alias.asname or alias.name).split('.')[0] for node in ast.walk(tree)
+              if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
+    if missing in bound:
+        return None
+    names = bound | {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    if difflib.get_close_matches(missing, names - {missing}, cutoff=.8):
         return None
     return 'needs_context', f'Uses `{missing}`, a value the reader supplies (an ID or input defined outside the docs).'
 
