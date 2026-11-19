@@ -161,6 +161,17 @@ def test_indented_fence(tmp_path):
     assert extract(tmp_path)[0][0].code == 'print(1)'
 
 
+def test_identity_includes_normalized_language(tmp_path):
+    path = tmp_path / 'a.md'
+    path.write_text('```py\n1\n```\n```js\n1\n```\n```python\n1\n```')
+    snippets, _ = extract(tmp_path)
+    assert snippets[0].id != snippets[1].id
+    assert snippets[0].id == snippets[2].id
+    identity = snippets[0].id
+    path.write_text('\n\n```python\n1\n```')
+    assert extract(tmp_path)[0][0].id == identity
+
+
 def test_local_timeout_and_empty():
     snippet = Snippet('x', 'a.md', 2, 'python', 'while True: pass')
     assert run(snippet, 'local', timeout=2)['status'] == 'timeout'

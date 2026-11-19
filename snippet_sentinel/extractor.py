@@ -66,6 +66,6 @@ def extract(root):
                 elif any(re.match(r'^\s*(?://\s*)?\.\.\.\s*$', line) for line in body):
                     reason = 'placeholder ellipsis'
                 relative = path.relative_to(root).as_posix()
-                identity = hashlib.sha256((relative + '\0' + code).encode()).hexdigest()[:24]
+                identity = hashlib.sha256((relative + '\0' + lang + '\0' + code).encode()).hexdigest()[:24]
                 snippets.append(Snippet(identity, relative, start + 2, lang, code, reason))
     return snippets, stats
