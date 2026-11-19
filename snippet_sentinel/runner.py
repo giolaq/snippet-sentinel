@@ -209,7 +209,7 @@ def python_inconclusive(code, status, output):
     name, message = error['name'], error['message'] or ''
     frames = re.findall(r'^  File "([^"\n]+)", line \d+, in ', output[:error.start()], re.M)
     if (name.endswith('MissingDependencyError') or name in {'ImportError', 'ModuleNotFoundError'}
-            and re.search(r'pip install|to be installed|install it\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
+            and re.search(r'pip install|to be installed|install it\b|Use pip\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
         return 'needs_context', f'The SDK needs an optional dependency the docs ask readers to install: {message[:120]}'
     if path := READER_INPUT.search(message):
         return 'needs_context', f'Needs a local file or directory the reader provides: {next(filter(None, path.groups()))}'
