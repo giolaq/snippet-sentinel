@@ -8,7 +8,7 @@ from snippet_sentinel.classifier import classify
 from snippet_sentinel.dependencies import dependencies, is_esm, pinned
 from snippet_sentinel.extractor import extract
 from snippet_sentinel.extractor import Snippet
-from snippet_sentinel.runner import run
+from snippet_sentinel.runner import InfrastructureError, run
 from snippet_sentinel.scan import github_url, scan
 from snippet_sentinel.storage import Store
 from snippet_sentinel.web import create_app, render_run
@@ -120,6 +120,40 @@ def test_invalid_repo(tmp_path):
     with pytest.raises(ValueError):
         scan(str(tmp_path / 'absent'), db=tmp_path / 'errors.db')
     assert Store(tmp_path / 'errors.db').get(1)['error']
+
+
+@pytest.mark.parametrize('failure', ['daemon unavailable', 'image pull failed', 'creation timed out', 'executable missing'])
+def test_docker_infrastructure_error(tmp_path, monkeypatch, failure):
+    def fail(*args, **kwargs):
+        if failure == 'executable missing':
+            raise FileNotFoundError('docker')
+        return failure, 1, failure == 'creation timed out'
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', fail)
+    (tmp_path / 'a.md').write_text('```py\nprint(1)\n```')
+    db = tmp_path / 'scan.db'
+    with pytest.raises(InfrastructureError, match='Docker'):
+        scan(str(tmp_path), db=db)
+    stored = Store(db).get(1)
+    assert stored['finished'] and 'Docker' in stored['error']
+    assert stored['counts'] == {} and stored['results'] == []
+    assert Store(db).leaderboard()[0]['broken'] == 0
+    client = TestClient(create_app(db))
+    assert 'Docker' in client.get('/runs/1').text
+
+
+def test_cli_infrastructure_error(tmp_path, monkeypatch, capsys):
+    from snippet_sentinel.cli import main
+
+    def fail(*args, **kwargs):
+        raise InfrastructureError('Docker daemon unavailable')
+
+    monkeypatch.setattr('snippet_sentinel.cli.scan', fail)
+    monkeypatch.setattr('sys.argv', ['snippet-sentinel', 'scan', str(tmp_path)])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 1
+    assert 'Docker daemon unavailable' in capsys.readouterr().err
 
 
 def test_indented_fence(tmp_path):

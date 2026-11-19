@@ -13,6 +13,10 @@ from .classifier import classify
 from .dependencies import dependencies, javascript_mode, pinned
 
 
+class InfrastructureError(RuntimeError):
+    pass
+
+
 def command(args, cwd, timeout, env=None):
     with tempfile.TemporaryFile() as output:
         process = subprocess.Popen(args, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT,
@@ -92,14 +96,19 @@ const r = spawnSync('node',[filename],{stdio:'inherit'}); process.exit(r.status 
                     '--workdir', '/work', image, 'python' if python else 'node',
                     'worker.py' if python else 'worker.cjs', payload], directory, timeout)
                 if rc or expired:
-                    return {**result, 'status': 'timeout' if expired else 'runtime_error', 'stderr': out, 'exit_code': rc}
+                    raise InfrastructureError(f'Docker container creation failed (image/daemon unavailable): {out or "timed out"}')
                 out, rc, expired = command(['docker', 'cp', directory + '/.', name + ':/work'], directory, timeout - (time.monotonic() - started))
-                if not rc and not expired:
-                    out, rc, expired = command(['docker', 'start', '-a', name], directory, timeout - (time.monotonic() - started))
-                    if not expired:
-                        inspect = subprocess.run(['docker', 'inspect', '-f', '{{.State.ExitCode}}', name], capture_output=True, text=True)
-                        if inspect.returncode == 0:
-                            rc = int(inspect.stdout.strip())
+                if rc or expired:
+                    raise InfrastructureError(f'Docker container setup failed: {out or "timed out"}')
+                out, rc, expired = command(['docker', 'start', '-a', name], directory, timeout - (time.monotonic() - started))
+                if not expired:
+                    inspect = subprocess.run(['docker', 'inspect', '-f', '{{json .State}}', name], capture_output=True, text=True)
+                    if inspect.returncode:
+                        raise InfrastructureError(f'Docker container inspection failed: {inspect.stderr}')
+                    state = json.loads(inspect.stdout)
+                    if state.get('Error') or state.get('Status') != 'exited':
+                        raise InfrastructureError(f'Docker container start failed: {state.get("Error") or out}')
+                    rc = state['ExitCode']
             else:
                 env = {'PATH': os.environ.get('PATH', ''), 'HOME': directory, 'LANG': 'C.UTF-8'}
                 executable = sys.executable
@@ -123,6 +132,8 @@ const r = spawnSync('node',[filename],{stdio:'inherit'}); process.exit(r.status 
             result.update(status=classify(out, rc, expired, 'SENTINEL_INSTALL_FAILED' in out),
                           stderr='\n'.join(lines)[-8000:], exit_code=rc)
         except OSError as exc:
+            if runner == 'docker':
+                raise InfrastructureError(f'Docker unavailable: {exc}') from exc
             result.update(status='runtime_error', stderr=str(exc))
         finally:
             if runner == 'docker':
