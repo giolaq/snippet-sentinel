@@ -219,7 +219,8 @@ def python_inconclusive(code, status, output, exit_code=None):
     name, message = error['name'], error['message'] or ''
     frames = re.findall(r'^  File "([^"\n]+)", line \d+, in ', output[:error.start()], re.M)
     if (name.endswith('MissingDependencyError') or name in {'ImportError', 'ModuleNotFoundError'}
-            and re.search(r'pip install|to be installed|install it\b|Use pip\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
+            and re.search(r'pip install|to be installed|install it\b|Use pip\b', message, re.I)) and frames and (
+                'site-packages' in frames[-1] or frames[-1].startswith('/work/.packages/')):
         return 'needs_context', f'The SDK needs an optional dependency the docs ask readers to install: {message[:120]}'
     if path := READER_INPUT.search(message):
         return 'needs_context', f'Needs a local file or directory the reader provides: {next(filter(None, path.groups()))}'
@@ -666,7 +667,7 @@ process.exit(r.status === null ? 1 : r.status);
                 reason = documented_failure(snippet, status, output)
             if exported_by and reason.startswith('requires example setup'):
                 reason = ''
-            inconclusive = (python and not reason and not exported_by and status in BROKEN
+            inconclusive = (python and not reason and not exported_by and status in BROKEN - {'output_limit', 'disk_limit'}
                             and python_inconclusive(code, status, output, rc))
             if python and expired and specs and 'SENTINEL_VERSIONS=' not in out and len(out.encode()) < 15000:
                 inconclusive = 'skipped', 'Installing dependencies exceeded the time limit; not evaluated.'

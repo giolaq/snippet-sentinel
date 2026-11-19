@@ -89,6 +89,37 @@ def test_command_output_budget_is_shared(tmp_path):
     assert 'SENTINEL_OUTPUT_LIMIT' in second
 
 
+@pytest.mark.parametrize('failure,expected', [('SENTINEL_OUTPUT_LIMIT: output limit exceeded', 'output_limit'),
+                                            ('OSError: No space left on device', 'disk_limit')])
+def test_python_resource_limits_precede_context_diagnostics(monkeypatch, failure, expected):
+    def fake_command(args, *unused):
+        return (failure + '\nCacheNotFound: Cache directory not found', 1, False) if 'worker.py' in args else ('', 0, False)
+
+    def unexpected_context(*args):
+        pytest.fail('Resource limits must take precedence over context diagnostics')
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *a, **kw: None)
+    monkeypatch.setattr('snippet_sentinel.runner.python_inconclusive', unexpected_context)
+    result = run(Snippet('resource', 'a.md', 1, 'python', 'print(1)'))
+    assert result['status'] == expected, result
+
+
+@pytest.mark.parametrize('source,expected', [('/work/.packages/sdk/extra.py', 'needs_context'),
+                                           ('/venv/lib/python3.12/site-packages/sdk/extra.py', 'needs_context'),
+                                           ('/work/snippet.py', 'missing_dependency')])
+def test_python_optional_extra_context_recognizes_sandbox_package_target(monkeypatch, source, expected):
+    output = f'Traceback (most recent call last):\n  File "{source}", line 1, in load\nImportError: pip install sdk[extra]'
+
+    def fake_command(args, *unused):
+        return (output, 1, False) if 'worker.py' in args else ('', 0, False)
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *a, **kw: None)
+    result = run(Snippet('extra', 'a.md', 1, 'python', 'print(1)'))
+    assert result['status'] == expected, result
+
+
 def test_peer_removal_failure_never_creates_a_networked_replacement(monkeypatch):
     calls = []
 
