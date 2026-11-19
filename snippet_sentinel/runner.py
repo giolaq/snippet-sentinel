@@ -87,7 +87,11 @@ def missing_placeholder_path(code, message, frames):
     lines = [int(line) for file, line in frames if file.endswith('/snippet.py')]
     if not lines:
         return ''
-    calls = [node for node in ast.walk(ast.parse(code)) if isinstance(node, ast.Call)
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return ''
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
              and node.lineno <= lines[-1] <= node.end_lineno]
     if len(calls) != 1 or ast.unparse(calls[0].func) != 'ssl.create_default_context':
         return ''
@@ -139,7 +143,7 @@ def documented_failure(snippet, status, output):
     if name == 'SyntaxError' and message == "'await' outside function" and snippet.context_names:
         return 'async fragment requiring earlier setup: ' + ', '.join(snippet.context_names)
     if name == 'FileNotFoundError' and snippet.lang == 'python':
-        path = missing_placeholder_path(snippet.code, message, frames)
+        path = missing_placeholder_path(runnable_code(snippet), message, frames)
         if path:
             return f'requires replacing the placeholder path: {path}'
     return ''
@@ -332,6 +336,8 @@ process.exit(r.status === null ? 1 : r.status);
                 reason = illustrative_dependency(snippet, output) if status == 'missing_dependency' else ''
             else:
                 reason = documented_failure(snippet, status, output)
+            if exported_by and reason.startswith('requires example setup'):
+                reason = ''
             if reason:
                 status = 'skipped'
             elif status == 'needs_context':

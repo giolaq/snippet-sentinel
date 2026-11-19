@@ -571,6 +571,23 @@ def test_python_value_placeholders(tmp_path, code, reason):
     assert extract(tmp_path)[0][0].reason == reason
 
 
+def test_repl_source_bare_continuation_ends_the_block():
+    code = '>>> for i in [1]:\n...     print(i)\n...\n    1'
+    assert repl_source(code) == 'for i in [1]:\n    print(i)\n'
+
+
+def test_repl_ssl_placeholder_path_does_not_abort(tmp_path):
+    (tmp_path / 'a.md').write_text('```py\n>>> import ssl\n>>> ssl.create_default_context(cafile="/path/to/ca.pem")\n```\n')
+    result = run(extract(tmp_path)[0][0], 'local', timeout=60)
+    assert result['status'] == 'skipped' and 'placeholder path' in result['reason'], result
+
+
+def test_package_export_is_not_hidden_by_later_binding(tmp_path):
+    (tmp_path / 'a.md').write_text('```py\n>>> import pytest\n>>> fixture\n```\n\n```py\nfrom pytest import fixture\n```\n')
+    result = run(extract(tmp_path)[0][0], 'local', timeout=120)
+    assert result['status'] == 'runtime_error' and 'exported by `pytest`' in result['reason'], result
+
+
 def test_repl_source_keeps_unprompted_block_bodies():
     code = '>>> def f():\n    x = 1\n    raise ValueError(x)\n>>> f()'
     assert repl_source(code) == 'def f():\n    x = 1\n    raise ValueError(x)\nf()'

@@ -101,7 +101,10 @@ def repl_source(code):
         if stripped.startswith('>>>'):
             statement = [stripped[4:] if stripped.startswith('>>> ') else stripped[3:]]
             lines.append(statement[0])
-        elif statement and (stripped == '...' or stripped.startswith('... ')):
+        elif statement and stripped == '...':
+            lines.append('')
+            statement = None
+        elif statement and stripped.startswith('... '):
             statement.append(stripped[4:])
             lines.append(stripped[4:])
         elif statement and (incomplete('\n'.join(statement))
