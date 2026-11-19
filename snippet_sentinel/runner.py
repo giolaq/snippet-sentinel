@@ -481,7 +481,7 @@ let r;
 if (esm) {
  r = exec(filename, {stdio: 'inherit'});
 } else {
- r = exec(filename, {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 2 * 1024 * 1024});
+ r = exec(filename, {stdio: ['inherit', 'inherit', 'pipe', 2], env: {...process.env, SENTINEL_NETWORK_MARKER_FD: '3'}, encoding: 'utf8', maxBuffer: 2 * 1024 * 1024});
  if (r.error && r.error.code === 'ENOBUFS') {
   fs.writeSync(2, 'SENTINEL_OUTPUT_LIMIT: output limit exceeded (2 MiB)\\n');
   process.exit(1);

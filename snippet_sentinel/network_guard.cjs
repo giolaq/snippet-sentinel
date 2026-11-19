@@ -1,12 +1,14 @@
 const dns = require('node:dns');
 const net = require('node:net');
 const fs = require('node:fs');
+const markerFd = process.env.SENTINEL_NETWORK_MARKER_FD === '3' ? 3 : 2;
+delete process.env.SENTINEL_NETWORK_MARKER_FD;
 
 function local(host) {
  return !host || host === 'localhost' || host === '::1' || /^127\./.test(host);
 }
 function blocked() {
- fs.writeSync(2, 'SENTINEL_NETWORK_BLOCKED\n');
+ fs.writeSync(markerFd, 'SENTINEL_NETWORK_BLOCKED\n');
  return Object.assign(new Error('Network disabled by Snippet Sentinel'), {code: 'ENETUNREACH'});
 }
 const lookup = dns.lookup;

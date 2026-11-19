@@ -84,6 +84,7 @@ CASES = [
     ('javascript', "import axios from 'axios';await axios.get('https://example.com');", 'needs_network'),
     ('python', "import socket,time\ntry: socket.create_connection(('example.com',443))\nexcept OSError: time.sleep(60)", 'needs_network'),
     ('javascript', "try{await fetch('https://example.com')}catch{};await new Promise(r=>setTimeout(r,60000));", 'needs_network'),
+    ('javascript', "require('node:http').get('http://example.com').on('error',()=>setTimeout(()=>{},60000));", 'needs_network'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nobject().renamed_method()", 'runtime_error'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\n1/0", 'runtime_error'),
     ('python', "import socket\ntry: socket.create_connection(('example.com',443))\nexcept OSError: pass\nraise ValueError('bad input')", 'runtime_error'),
