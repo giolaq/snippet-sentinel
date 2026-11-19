@@ -84,7 +84,7 @@ def javascript_fragment(code):
     first = next((line for line in bare.splitlines() if line.strip() and not line.lstrip().startswith('//')), '')
     if re.match(r'\s*(?:await\s+)?\.[A-Za-z_$]', first):
         return 'method-chain fragment'
-    if re.search(r'\u2026|\.\.\.\s*[)\]},]', re.sub(r'//[^\n]*', '', bare)):
+    if re.search(r'\u2026|\.\.\.\s*[)\]},](?!\s*/)', re.sub(r'//[^\n]*', '', bare)):
         return 'placeholder ellipsis'
     return ''
 
