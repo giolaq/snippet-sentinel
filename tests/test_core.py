@@ -36,6 +36,22 @@ def test_dependencies(code, lang, expected):
     assert dependencies(code, lang) == expected
 
 
+@pytest.mark.parametrize('code,expected', [
+    ('from google.cloud import storage', ['google-cloud-storage']),
+    ('import google.cloud.storage', ['google-cloud-storage']),
+    ('from google.cloud.bigquery_storage import BigQueryReadClient', ['google-cloud-bigquery-storage']),
+    ('from google.cloud import storage, bigquery', ['google-cloud-bigquery', 'google-cloud-storage']),
+    ('import google.auth\nfrom google.oauth2 import service_account', ['google-auth']),
+    ('from google.protobuf import timestamp_pb2', ['protobuf']),
+    ('import google.api_core.exceptions', ['google-api-core']),
+    ('import googleapiclient.discovery', ['google-api-python-client']),
+    ('import google\nimport google.cloud', ['google-api-python-client']),
+    ('from google.cloud import', []),
+])
+def test_google_namespace_packages(code, expected):
+    assert dependencies(code, 'python') == expected
+
+
 def test_pins_and_esm():
     assert pinned(['requests'], ['requests==2.32.3'], 'python') == ['requests==2.32.3']
     assert pinned(['@a/b'], ['@a/b@1.2.3'], 'javascript') == ['@a/b@1.2.3']

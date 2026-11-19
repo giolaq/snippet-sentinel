@@ -5,8 +5,23 @@ import sys
 PY_PACKAGES = {'PIL': 'pillow', 'yaml': 'pyyaml', 'sklearn': 'scikit-learn',
                'cv2': 'opencv-python', 'bs4': 'beautifulsoup4', 'dotenv': 'python-dotenv',
                'dateutil': 'python-dateutil', 'jwt': 'pyjwt', 'OpenSSL': 'pyopenssl',
-               'requests_oauthlib': 'requests-oauthlib', 'google': 'google-api-python-client'}
+               'requests_oauthlib': 'requests-oauthlib', 'google': 'google-api-python-client',
+               'googleapiclient': 'google-api-python-client'}
 BUILTINS = set('assert async_hooks buffer child_process cluster console constants crypto dgram diagnostics_channel dns domain events fs http http2 https inspector inspector/promises module net os path perf_hooks process punycode querystring readline repl sea sqlite stream string_decoder sys test timers tls trace_events tty url util v8 vm wasi worker_threads zlib'.split())
+
+
+def python_package(module):
+    parts = module.split('.')
+    if parts[:2] == ['google', 'cloud'] and len(parts) > 2:
+        return 'google-cloud-' + parts[2].replace('_', '-')
+    if parts[:2] in (['google', 'auth'], ['google', 'oauth2']):
+        return 'google-auth'
+    if parts[:2] == ['google', 'protobuf']:
+        return 'protobuf'
+    if parts[:2] == ['google', 'api_core']:
+        return 'google-api-core'
+    root = parts[0]
+    return PY_PACKAGES.get(root, root)
 
 
 def dependencies(code, lang):
@@ -18,10 +33,13 @@ def dependencies(code, lang):
         names = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                names.update(n.name.split('.')[0] for n in node.names)
+                names.update(n.name for n in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-                names.add(node.module.split('.')[0])
-        return sorted({PY_PACKAGES.get(n, n) for n in names if n not in sys.stdlib_module_names})
+                if node.module == 'google.cloud':
+                    names.update(node.module + '.' + n.name for n in node.names if n.name != '*')
+                else:
+                    names.add(node.module)
+        return sorted({python_package(n) for n in names if n.split('.')[0] not in sys.stdlib_module_names})
     specs = re.findall(r'''(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)['"]([^'"]+)['"]''', code)
     packages = set()
     for spec in specs:
