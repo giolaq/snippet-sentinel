@@ -1,4 +1,5 @@
 import ast
+import codeop
 import doctest
 import hashlib
 import os
@@ -13,7 +14,8 @@ from .classifier import final_error
 LANGS = {**dict.fromkeys(('js', 'javascript', 'jsx', 'mjs', 'cjs', 'node'), 'javascript'),
          **dict.fromkeys(('ts', 'typescript', 'tsx', 'mts', 'cts'), 'typescript'),
          **dict.fromkeys(('py', 'python', 'python3', 'pycon'), 'python')}
-SKIP_DIRS = {'.git', 'node_modules', 'vendor'}
+SKIP_DIRS = {'node_modules', 'vendor'}
+CHANGELOG_STEMS = {'changelog', 'changes', 'history', 'news', 'releases', 'release_notes', 'release-notes'}
 OPT_OUT = re.compile(r"""(?<!\S)(?:skip|norun|no-run)(?!\S)|(?:^|[\s{])(?:test|run)\s*=\s*(?:"skip"|'skip'|skip(?=[\s}]|$))""", re.I)
 SHELL_LINE = re.compile(r'^\s*(?:\$\s+\S|!?(?:pip3?|python3?\s+-m\s+pip)\s+(?:install|uninstall|show|freeze|list)\b|export\s+[A-Za-z_]\w*=)')
 INLINE_API = re.compile(r'`([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)+)`')
@@ -91,14 +93,67 @@ def javascript_fragment(code):
     return ''
 
 
+def repl_source(code):
+    """Turn a `>>>` transcript into a script: prompts become code, expected output is dropped."""
+    lines, statement = [], None
+    for line in code.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith('>>>'):
+            statement = [stripped[4:] if stripped.startswith('>>> ') else stripped[3:]]
+            lines.append(statement[0])
+        elif statement and stripped == '...':
+            lines.append('')
+            statement = None
+        elif statement and stripped.startswith('... '):
+            statement.append(stripped[4:])
+            lines.append(stripped[4:])
+        elif statement and (incomplete('\n'.join(statement))
+                            or (line[:1].isspace() and statement[0].split('#')[0].rstrip().endswith(':'))):
+            statement.append(line)
+            lines.append(line)
+        else:
+            statement = None
+    return '\n'.join(lines)
+
+
+def incomplete(source):
+    try:
+        return codeop.compile_command(source, symbol='exec') is None
+    except (SyntaxError, ValueError, OverflowError):
+        return False
+
+
+def value_placeholder(code):
+    """`...` standing in for a value (`create(id=...)`); bodies (`def f(): ...`) and `tuple[int, ...]` are code."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    allowed = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
+    allowed |= {id(n) for node in ast.walk(tree) if isinstance(node, ast.Subscript) for n in ast.walk(node.slice)}
+    return any(isinstance(node, ast.Constant) and node.value is Ellipsis and id(node) not in allowed
+               for node in ast.walk(tree))
+
+
+def runnable_code(snippet):
+    if snippet.lang == 'python' and re.match(r'\s*>>>', next((line for line in snippet.code.splitlines()
+                                                             if line.strip() and not line.lstrip().startswith('#')), '')):
+        return repl_source(snippet.code)
+    return snippet.code
+
+
 def extract(root):
     snippets, stats = [], {'unsupported': 0}
     root = Path(root)
     for directory, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not Path(directory, d).is_symlink())
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')
+                         and not Path(directory, d).is_symlink())
         for name in sorted(files):
             path = Path(directory, name)
             if path.suffix.lower() not in {'.md', '.mdx', '.markdown'} or path.is_symlink():
+                continue
+            if path.stem.lower() in CHANGELOG_STEMS:
+                stats['changelog'] = stats.get('changelog', 0) + 1
                 continue
             lines = path.read_text(errors='replace').splitlines()
             python_bindings = set()
@@ -140,10 +195,11 @@ def extract(root):
                 shell = lang == 'python' and bool(code.strip()) and all(
                     SHELL_LINE.match(line) for line in body if line.strip() and not line.lstrip().startswith('#')
                 ) and any(SHELL_LINE.match(line) for line in body)
-                scope = python_scope(code, transcript) if lang == 'python' and not shell else None
+                source = repl_source(code) if lang == 'python' and transcript else code
+                scope = python_scope(source, False) if lang == 'python' and not shell else None
                 context_names = ()
                 free_names = set()
-                if scope and not transcript:
+                if scope:
                     free_names = {symbol.get_name() for symbol in scope.get_symbols()
                                   if symbol.is_referenced() and not symbol.is_assigned() and not symbol.is_imported()
                                   and not symbol.is_namespace()}
@@ -153,8 +209,13 @@ def extract(root):
                     reason = 'info-string opt-out'
                 elif start and lines[start - 1].strip() == '<!-- sentinel:skip -->':
                     reason = 'sentinel:skip comment'
-                elif transcript:
+                elif transcript and lang != 'python':
                     reason = 'REPL transcript'
+                elif transcript and re.search(r'^\s*Traceback \(most recent call last\)', code, re.M):
+                    reason = 'REPL transcript expects an exception'
+                elif transcript:
+                    reason = ('placeholder ellipsis' if (scope and value_placeholder(source))
+                              or (not scope and re.search(r'\.\.\.|\u2026', source)) else '')
                 elif shell:
                     reason = 'shell commands in a Python fence'
                 elif any(re.match(r'^\s*(?://\s*)?\.\.\.\s*$', line) for line in body):
@@ -165,6 +226,10 @@ def extract(root):
                         reason = 'placeholder ellipsis'
                 elif lang != 'python':
                     reason = javascript_fragment(code)
+                elif scope and value_placeholder(source):
+                    reason = 'placeholder ellipsis'
+                elif lang == 'python' and not shell and not scope and re.search(r'\.\.\.|\u2026', source):
+                    reason = 'placeholder ellipsis'
                 if scope and (not reason or transcript):
                     python_bindings.update(symbol.get_name() for symbol in scope.get_symbols()
                                            if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace())
@@ -174,7 +239,7 @@ def extract(root):
                                   context_names, expected_error(lines, i))
                 snippets.append(snippet)
                 if free_names and not reason:
-                    tree = ast.parse(code)
+                    tree = ast.parse(source)
                     names = documented_inputs(tree, prose, free_names, context_names)
                     if len(tree.body) == 1:
                         references = {f'{node.value.id}.{node.attr}' for node in ast.walk(tree)

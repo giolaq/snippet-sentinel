@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from snippet_sentinel.classifier import classify
 from snippet_sentinel.dependencies import script_name, dependencies, is_esm, pinned
-from snippet_sentinel.extractor import extract, javascript_fragment
+from snippet_sentinel.extractor import extract, javascript_fragment, repl_source
 from snippet_sentinel.runner import javascript_placeholder
 from snippet_sentinel.extractor import Snippet
 from snippet_sentinel.runner import InfrastructureError, documented_failure, run
@@ -25,7 +25,7 @@ def test_extract(tmp_path):
     assert len(snippets) == 6
     assert snippets[0].line == 2 and snippets[0].lang == 'python'
     assert snippets[1].lang == 'typescript' and not snippets[1].reason
-    assert all(s.reason for s in snippets[2:])
+    assert [bool(s.reason) for s in snippets[2:]] == [True, True, False, True]
     assert stats == {'unsupported': 0}
     assert extract(tmp_path)[0][0].id == snippets[0].id
     assert extract(tmp_path / 'vendor' / 'absent') == ([], {'unsupported': 0})
@@ -239,14 +239,14 @@ def test_classifier_uses_final_error(output, expected):
 def test_local_demo(tmp_path):
     run = scan(str(Path(__file__).parents[1] / 'examples/demo-docs'), db=tmp_path / 'scan.db', runner='local', jobs=4, timeout=60)
     assert not run['error']
-    assert run['counts']['skipped'] == 5
-    assert run['counts']['pass'] >= 1
+    assert run['counts']['skipped'] == 4
+    assert run['counts']['pass'] >= 2
     assert run['counts']['syntax_error'] >= 1
     assert run['counts']['missing_dependency'] >= 1
     assert run['counts']['runtime_error'] >= 1
     assert run['counts']['needs_credentials'] >= 1
     if shutil.which('node') and shutil.which('npm'):
-        assert run['counts'] == {'pass': 3, 'syntax_error': 2, 'missing_dependency': 2, 'runtime_error': 2, 'needs_credentials': 2, 'skipped': 5}
+        assert run['counts'] == {'pass': 4, 'syntax_error': 2, 'missing_dependency': 2, 'runtime_error': 2, 'needs_credentials': 2, 'skipped': 4}
     assert 'UNSANDBOXED' in render_run(run, static=True)
 
 
@@ -353,7 +353,7 @@ def test_unclosed_fence_at_eof(tmp_path):
 def test_commented_python_repl_transcript(tmp_path):
     (tmp_path / 'a.md').write_text('\x60\x60\x60python\n# Interactive example\n\n>>> print(1)\n1\n\x60\x60\x60\n')
     snippets, _ = extract(tmp_path)
-    assert snippets[0].reason == 'REPL transcript'
+    assert snippets[0].reason == ''
 
 
 def test_extract_non_runnable_python_blocks(tmp_path):
@@ -368,7 +368,7 @@ def test_extract_non_runnable_python_blocks(tmp_path):
     )
     snippets, _ = extract(tmp_path)
     assert [s.reason for s in snippets] == [
-        'shell commands in a Python fence', 'shell commands in a Python fence', 'REPL transcript', '',
+        'shell commands in a Python fence', 'shell commands in a Python fence', '', '',
         'info-string opt-out', '', '',
     ]
 
@@ -377,7 +377,7 @@ def test_extract_non_runnable_python_blocks(tmp_path):
     ('json.dumps(1)', '', 'skipped'),
     ('await json.load(None)', '', 'skipped'),
     ('jsons.dumps(1)', '', 'runtime_error'),
-    ('await unknown()', '', 'syntax_error'),
+    ('await unknown()', '', 'runtime_error'),
     ('raise ValueError("expected")', 'ValueError: expected', 'skipped'),
     ('raise TypeError("wrong exception")', 'ValueError: expected', 'runtime_error'),
     ('try:\n    raise ValueError("expected")\nexcept ValueError as exc:\n    raise TypeError from exc',
@@ -392,7 +392,7 @@ def test_run_documentation_fragments(tmp_path, body, output, expected):
     snippet = extract(tmp_path)[0][1]
     result = run(snippet, runner='local')
     assert result['status'] == expected, result
-    assert bool(result['reason']) == (expected == 'skipped')
+    assert bool(result['reason']) == (expected in {'skipped', 'needs_context'})
 
 
 def test_name_error_with_import_suggestion():
@@ -555,3 +555,114 @@ def test_javascript_fragment(code, expected):
 ])
 def test_javascript_placeholder(code, error, expected):
     assert javascript_placeholder(code, error) == expected
+
+
+@pytest.mark.parametrize('code,reason', [
+    ('class A: ...', ''),
+    ('x: tuple[int, ...] = (1, 2)', ''),
+    ('client.create(environment_id=...)', 'placeholder ellipsis'),
+    ('logging.set_verbosity(...)', 'placeholder ellipsis'),
+    ('>>> from x import y\n>>> y(...)', 'placeholder ellipsis'),
+    ('>>> e = create(name="x",...).wait()', 'placeholder ellipsis'),
+    ('>>> 1 / 0\nTraceback (most recent call last):\nZeroDivisionError', 'REPL transcript expects an exception'),
+])
+def test_python_value_placeholders(tmp_path, code, reason):
+    (tmp_path / 'a.md').write_text(f'```python\n{code}\n```\n')
+    assert extract(tmp_path)[0][0].reason == reason
+
+
+def test_repl_source_bare_continuation_ends_the_block():
+    code = '>>> for i in [1]:\n...     print(i)\n...\n    1'
+    assert repl_source(code) == 'for i in [1]:\n    print(i)\n'
+
+
+def test_repl_ssl_placeholder_path_does_not_abort(tmp_path):
+    (tmp_path / 'a.md').write_text('```py\n>>> import ssl\n>>> ssl.create_default_context(cafile="/path/to/ca.pem")\n```\n')
+    result = run(extract(tmp_path)[0][0], 'local', timeout=60)
+    assert result['status'] == 'skipped' and 'placeholder path' in result['reason'], result
+
+
+def test_package_export_is_not_hidden_by_later_binding(tmp_path):
+    (tmp_path / 'a.md').write_text('```py\n>>> import pytest\n>>> fixture\n```\n\n```py\nfrom pytest import fixture\n```\n')
+    result = run(extract(tmp_path)[0][0], 'local', timeout=120)
+    assert result['status'] == 'runtime_error' and 'exported by `pytest`' in result['reason'], result
+
+
+def test_package_submodule_name_is_not_a_missing_import():
+    code = 'import os\nimport pytest\nprint(pytest.raises, python)'
+    result = run(Snippet('py', 'a.md', 1, 'python', code), 'local', timeout=120)
+    assert 'exported by' not in result['reason'], result
+
+
+def test_repl_source_keeps_unprompted_block_bodies():
+    code = '>>> def f():\n    x = 1\n    raise ValueError(x)\n>>> f()'
+    assert repl_source(code) == 'def f():\n    x = 1\n    raise ValueError(x)\nf()'
+
+
+def test_launcher_does_not_preload_modules():
+    code = 'import collections\nprint(collections.abc.Mapping)'
+    assert run(Snippet('py', 'a.md', 1, 'python', code), 'local', timeout=60)['status'] == 'runtime_error'
+
+
+def test_repl_source():
+    code = '>>> from math import sqrt\n>>> for i in [4]:\n...     print(sqrt(i))\n...\n2.0\n>>> print(\n    "a",\n)\na\n>>> sqrt(9)\n3.0'
+    assert repl_source(code) == 'from math import sqrt\nfor i in [4]:\n    print(sqrt(i))\n\nprint(\n    "a",\n)\nsqrt(9)'
+
+
+def test_hidden_dirs_and_changelogs_ignored(tmp_path):
+    for name in ['.hark/changes/x.md', '.github/a.md', 'CHANGELOG.md', 'docs/HISTORY.md', 'docs/guide.md']:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text('```python\nprint(1)\n```\n')
+    snippets, stats = extract(tmp_path)
+    assert [s.file for s in snippets] == ['docs/guide.md']
+    assert stats['changelog'] == 2
+
+
+@pytest.mark.parametrize('message,expected', [
+    ('ValueError: You must provide an api_key to work with auto API or log in with `hf auth login`.', 'needs_credentials'),
+    ('huggingface_hub.errors.LocalTokenNotFoundError: Token is required to call the /whoami-v2 endpoint', 'needs_credentials'),
+    ("TypeError: __init__() got an unexpected keyword argument 'api_key'", 'runtime_error'),
+    ('huggingface_hub.errors.RepositoryNotFoundError: 401 Client Error. (Request ID: Root=1)', 'needs_credentials'),
+    ('ImportError: Using RepoCard.from_template requires Jinja2. Please install it with `pip install Jinja2`.', 'missing_dependency'),
+])
+def test_python_sdk_error_classification(message, expected):
+    assert classify(message, 1, code='x()') == expected
+
+
+@pytest.mark.parametrize('code,expected', [
+    ('import asyncio\nawait asyncio.sleep(0)\nprint("done")', 'pass'),
+    ('async def gen():\n    yield 1\nasync for x in gen():\n    print(x)', 'pass'),
+    ('import asyncio\nawait asyncio.sleep(0)\nraise RuntimeError("broken")', 'runtime_error'),
+    ('import sys\nassert __name__ == "__main__" and sys.argv[0].endswith("snippet.py")', 'pass'),
+    ('>>> import asyncio\n>>> await asyncio.sleep(0)\n>>> print(2)\n2', 'pass'),
+])
+def test_python_top_level_await_and_transcripts(code, expected):
+    result = run(Snippet('py', 'a.md', 1, 'python', code), 'local', timeout=60)
+    assert result['status'] == expected, result['stderr']
+
+
+@pytest.mark.parametrize('code,reason', [
+    ('create(name="x",...).wait()', 'placeholder ellipsis'),
+    ('class A(B):\n   (...)\n\n    def f(self):\n        pass', 'placeholder ellipsis'),
+    ('print(1', ''),
+])
+def test_unparseable_python_with_ellipsis_is_a_placeholder(tmp_path, code, reason):
+    (tmp_path / 'a.md').write_text(f'```python\n{code}\n```\n')
+    assert extract(tmp_path)[0][0].reason == reason
+
+
+@pytest.mark.parametrize('code,expected', [
+    ('raise ValueError("bad")  # Raises ValueError', 'skipped'),
+    ('>>> raise ValueError("bad")\nValueError: bad', 'skipped'),
+    ('raise ValueError("bad")  # Raises TypeError', 'runtime_error'),
+    ('# ValueError handling below\nimport sys', 'pass'),
+])
+def test_snippet_that_says_it_raises(code, expected):
+    result = run(Snippet('py', 'a.md', 1, 'python', code), 'local', timeout=60)
+    assert result['status'] == expected, result['stderr']
+
+
+def test_python_missing_import_from_installed_package():
+    code = 'import pytest\nprint(fixture)'
+    result = run(Snippet('py', 'a.md', 1, 'python', code), 'local', timeout=120)
+    assert result['status'] == 'runtime_error' and 'exported by `pytest`' in result['reason'], result
