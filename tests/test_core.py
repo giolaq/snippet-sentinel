@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from snippet_sentinel.classifier import classify
 from snippet_sentinel.dependencies import script_name, dependencies, is_esm, pinned
 from snippet_sentinel.extractor import extract, javascript_fragment, repl_source
-from snippet_sentinel.runner import javascript_placeholder
+from snippet_sentinel.runner import javascript_placeholder, python_inconclusive
 from snippet_sentinel.extractor import Snippet
 from snippet_sentinel.runner import InfrastructureError, documented_failure, run
 from snippet_sentinel.scan import github_url, scan
@@ -666,3 +666,45 @@ def test_python_missing_import_from_installed_package():
     code = 'import pytest\nprint(fixture)'
     result = run(Snippet('py', 'a.md', 1, 'python', code), 'local', timeout=120)
     assert result['status'] == 'runtime_error' and 'exported by `pytest`' in result['reason'], result
+
+
+@pytest.mark.parametrize('code,status,output,expected', [
+    ('update_job_labels(job_id=job_id)', 'runtime_error', "NameError: name 'job_id' is not defined", 'needs_context'),
+    ('delete_repo(repo_id="x")', 'runtime_error', "NameError: name 'delete_repo' is not defined", None),
+    ('json.dumps(1)', 'runtime_error', "NameError: name 'json' is not defined", None),
+    ('client = 1\nprint(clinet)', 'runtime_error', "NameError: name 'clinet' is not defined", None),
+    ('def f() -> MyModel: pass', 'runtime_error', "NameError: name 'MyModel' is not defined", None),
+    ('upload_file(path_or_fileobj="/home/me/README.md")', 'runtime_error',
+     "ValueError: Provided path: '/home/me/README.md' is not a file on the local file system", 'needs_context'),
+    ('upload_folder(folder_path="./outputs")', 'runtime_error',
+     "ValueError: Source must be an existing local directory: './outputs'.", 'needs_context'),
+    ('open("/missing/config.json")', 'runtime_error',
+     "FileNotFoundError: [Errno 2] No such file or directory: '/missing/config.json'", None),
+    ('update_webhook(webhook_id="your-webhook-id")', 'runtime_error',
+     "huggingface_hub.errors.HfHubHTTPError: Client error '404 Not Found' for url 'https://hf.co/api/webhooks/your-webhook-id'", 'needs_context'),
+    ('snapshot_download("gpt2")', 'runtime_error',
+     "huggingface_hub.errors.HfHubHTTPError: Client error '404 Not Found' for url 'https://hf.co/api/models/gpt2'", None),
+    ('client = InferenceClient("http://localhost:8080")', 'runtime_error', 'httpx.ConnectError: [Errno 111] Connection refused', 'needs_context'),
+    ('login()', 'timeout', 'Open this URL\n    Waiting for authorization......', 'needs_credentials'),
+    ('snapshot_download("big")', 'timeout', 'Fetching 1004 files:   2%| 20/1004 [00:10<\nFetching 1004 files:   5%| 50/1004 [00:40<', 'skipped'),
+    ('while True: pass', 'timeout', '', None),
+    ('print(result)\nresult = 1', 'runtime_error', "NameError: name 'result' is not defined", None),
+    ('def f(client):\n    return send(x=clinet)\nf(1)', 'runtime_error', "NameError: name 'clinet' is not defined", None),
+    ('scan_cache_dir()', 'runtime_error', 'huggingface_hub.errors.CacheNotFound: Cache directory not found: /root/.cache/huggingface/hub.', 'needs_context'),
+])
+def test_python_inconclusive(code, status, output, expected):
+    verdict = python_inconclusive(code, status, output)
+    assert (verdict and verdict[0]) == expected, verdict
+
+
+def test_python_optional_extra_raised_inside_sdk():
+    output = ('Traceback (most recent call last):\n  File "/work/snippet.py", line 1, in <module>\n'
+              '  File "/usr/local/lib/python3.12/site-packages/huggingface_hub/repocard.py", line 9, in from_template\n'
+              'ImportError: Using RepoCard.from_template requires Jinja2 to be installed. Please install it with `pip install Jinja2`.')
+    assert python_inconclusive('x()', 'missing_dependency', output)[0] == 'needs_context'
+    direct = 'Traceback (most recent call last):\n  File "/work/snippet.py", line 1, in <module>\nModuleNotFoundError: No module named \'torch\''
+    assert python_inconclusive('import torch', 'missing_dependency', direct) is None
+    removed = ('Traceback (most recent call last):\n  File "/work/snippet.py", line 1, in <module>\n'
+               '  File "/usr/local/lib/python3.12/site-packages/sdk/__init__.py", line 3, in <module>\n'
+               "ImportError: cannot import name 'Thing' from 'sdk.core'")
+    assert python_inconclusive('import sdk', 'runtime_error', removed) is None

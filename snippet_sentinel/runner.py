@@ -1,4 +1,5 @@
 import ast
+import difflib
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .classifier import classify, error_summary, final_error, context_reason
+from .classifier import BROKEN, classify, error_summary, final_error, context_reason
 from .dependencies import TSX, dependencies, javascript_mode, pinned, python_package, script_name
 
 QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
@@ -185,6 +186,75 @@ def mentions_error(snippet, name):
     return False
 
 
+PLACEHOLDER_LITERAL = re.compile(r'(?i)\b(?:your|my)[-_][\w./-]*|<[\w -]+>')
+READER_INPUT = re.compile(r"Provided path: '([^']+)' is not a (?:file|directory)|Source must be an existing (?:local )?directory: '?([^'\s]+?)'?\.?$"
+                          r"|No such file or directory: '((?:\./)?path/to/[^']+)'")
+
+
+def python_inconclusive(code, status, output):
+    """(status, reason) for a Python failure that says nothing about the docs: the reader's files, IDs, extras or server."""
+    if status == 'timeout':
+        if re.search(r'Waiting for authorization|Enter your token|token \(input will not be visible\)', output):
+            return 'needs_credentials', 'Waits for an interactive login.'
+        if len(re.findall(r'\b(\d+)/\d+ \[', output)) > 1 and re.search(r'Fetching \d+ files|Downloading', output):
+            return 'skipped', 'Still downloading at the time limit; not evaluated.'
+        return None
+    if re.search(r'^(?:\w+\.)*CacheNotFound: Cache directory not found', output, re.M):
+        return 'needs_context', 'Inspects the reader\'s local Hub cache, which is empty in a fresh sandbox.'
+    error = final_error(output)
+    if not error:
+        return None
+    name, message = error['name'], error['message'] or ''
+    frames = re.findall(r'^  File "([^"\n]+)", line \d+, in ', output[:error.start()], re.M)
+    if (name.endswith('MissingDependencyError') or name in {'ImportError', 'ModuleNotFoundError'}
+            and re.search(r'pip install|to be installed|install it\b', message, re.I)) and frames and 'site-packages' in frames[-1]:
+        return 'needs_context', f'The SDK needs an optional dependency the docs ask readers to install: {message[:120]}'
+    if path := READER_INPUT.search(message):
+        return 'needs_context', f'Needs a local file or directory the reader provides: {next(filter(None, path.groups()))}'
+    if re.search(r'\b404\b|not found', message, re.I):
+        literals = [node.value for node in ast.walk(parse(code)) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        placeholder = next((m[0] for value in literals for m in PLACEHOLDER_LITERAL.finditer(value) if m[0] in message), '')
+        if placeholder:
+            return 'needs_context', f'Requires replacing the placeholder: {placeholder}'
+    if re.search(r'Connection refused|ConnectError', name + message) and re.search(r'localhost|127\.0\.0\.1|0\.0\.0\.0', code):
+        return 'needs_context', 'Talks to a server the reader runs locally.'
+    if name == 'NameError' and (missing := re.match(r"name '(\w+)' is not defined", message)):
+        return reader_value(code, missing[1])
+    return None
+
+
+def parse(code):
+    try:
+        return ast.parse(code)
+    except SyntaxError:
+        return ast.Module(body=[], type_ignores=[])
+
+
+def reader_value(code, missing):
+    """`update_job_labels(job_id=job_id)`: a value the reader supplies, not a missing import (called, `.attr`, `[...]`)."""
+    tree = parse(code)
+    uses = [node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == missing]
+    if not uses:
+        return None
+    structural = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    structural |= {id(node.value) for node in ast.walk(tree) if isinstance(node, (ast.Attribute, ast.Subscript))}
+    structural |= {id(node.returns) for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    structural |= {id(node.annotation) for node in ast.walk(tree) if isinstance(node, (ast.arg, ast.AnnAssign))}
+    if any(id(node) in structural for node in uses):
+        return None
+    bound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)}
+    bound |= {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
+    bound |= {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    bound |= {(alias.asname or alias.name).split('.')[0] for node in ast.walk(tree)
+              if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
+    if missing in bound:
+        return None
+    names = bound | {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    if difflib.get_close_matches(missing, names - {missing}, cutoff=.8):
+        return None
+    return 'needs_context', f'Uses `{missing}`, a value the reader supplies (an ID or input defined outside the docs).'
+
+
 def command(args, cwd, timeout, env=None):
     with tempfile.TemporaryFile() as output:
         process = subprocess.Popen(args, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT,
@@ -338,7 +408,11 @@ process.exit(r.status === null ? 1 : r.status);
                 reason = documented_failure(snippet, status, output)
             if exported_by and reason.startswith('requires example setup'):
                 reason = ''
-            if reason:
+            inconclusive = (python and not reason and not exported_by and status in BROKEN
+                            and python_inconclusive(code, status, output))
+            if inconclusive:
+                status, reason = inconclusive
+            elif reason:
                 status = 'skipped'
             elif status == 'needs_context':
                 reason = context_reason(output, code)
