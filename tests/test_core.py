@@ -266,6 +266,29 @@ def test_indented_fence(tmp_path):
     assert extract(tmp_path)[0][0].code == 'print(1)'
 
 
+def test_leaderboard_places_unassessed_runs_after_measured_runs(tmp_path):
+    db = tmp_path / 'leaderboard.db'
+    store = Store(db)
+    for repo, statuses, error in [
+        ('measured', ['pass'], ''),
+        ('credentials', ['needs_credentials', 'skipped'], ''),
+        ('failed', [], 'Docker unavailable'),
+        ('running', None, ''),
+    ]:
+        rid = store.start(repo)
+        if statuses is not None:
+            store.finish(rid, [{'id': str(i), 'status': status} for i, status in enumerate(statuses)], {}, error=error)
+    assert [(r['repo'], r['percent']) for r in store.leaderboard()] == [
+        ('measured', 0), ('credentials', None), ('failed', None), ('running', None),
+    ]
+    html = TestClient(create_app(db)).get('/').text
+    assert html.count('0.0%') == 1
+    assert '0 of 1 checked' in html
+    assert 'No eligible snippets' in html
+    assert html.count('Not available') == 2
+    assert html.count('class="rank"') == 1
+
+
 def test_identity_includes_normalized_language(tmp_path):
     path = tmp_path / 'a.md'
     path.write_text('```py\n1\n```\n```js\n1\n```\n```python\n1\n```')
