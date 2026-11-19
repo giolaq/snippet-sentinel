@@ -342,6 +342,19 @@ def test_name_error_with_import_suggestion():
     assert documented_failure(snippet, 'runtime_error', output) == ''
 
 
+def test_run_documented_javascript_reference_error(tmp_path):
+    if not shutil.which('node') or not shutil.which('npm'):
+        pytest.skip('Local Node and npm required')
+    (tmp_path / 'a.md').write_text(
+        '\x60\x60\x60js\nconsole.log(exampleValue)\n\x60\x60\x60\n\n'
+        '\x60\x60\x60output\nReferenceError: exampleValue is not defined\n\x60\x60\x60\n'
+    )
+    snippet = extract(tmp_path)[0][0]
+    result = run(snippet, runner='local')
+    assert result['status'] == 'skipped', result
+    assert result['reason'] == 'demonstrates ReferenceError as documented'
+
+
 def test_leaderboard_places_unassessed_runs_after_measured_runs(tmp_path):
     db = tmp_path / 'leaderboard.db'
     store = Store(db)

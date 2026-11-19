@@ -19,7 +19,7 @@ class InfrastructureError(RuntimeError):
 
 
 def documented_failure(snippet, status, output):
-    if status not in {'syntax_error', 'runtime_error', 'missing_dependency', 'needs_credentials'}:
+    if status not in {'syntax_error', 'runtime_error', 'missing_dependency', 'needs_credentials', 'needs_context'}:
         return ''
     error = final_error(output)
     if not error:
