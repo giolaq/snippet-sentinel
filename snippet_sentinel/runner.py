@@ -474,8 +474,8 @@ sys.exit(subprocess.call([sys.executable, 'sentinel_run.py', filename] if python
         if not python:
             js_worker = '''const {spawnSync} = require('node:child_process');
 const fs = require('node:fs');
-const [packages,specs,,filename,transpile,esm] = JSON.parse(process.argv[2]);
-const installs = transpile ? [...specs, %r] : specs;
+const [packages,specs,,filename,transpile,esm,prepared] = JSON.parse(process.argv[2]);
+const installs = transpile && !prepared ? [...specs, %r] : specs;
 if (transpile) fs.writeFileSync('package.json', JSON.stringify({type: esm ? 'module' : 'commonjs'}));
 if (installs.length) {
  const p = spawnSync('npm', ['install','--no-audit','--no-fund','--',...installs], {encoding:'utf8'});
@@ -484,7 +484,7 @@ if (installs.length) {
 const p = spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'});
 const deps = JSON.parse(p.stdout || '{}').dependencies || {};
 console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries(packages.filter(x=>deps[x]).map(x=>[x,deps[x].version]))));
-const exec = (file, options) => spawnSync(transpile ? 'node_modules/.bin/tsx' : 'node', [file], options);
+const exec = (file, options) => spawnSync('node', [...(transpile ? ['--import', 'tsx'] : []), file], options);
 let r;
 if (esm) {
  r = exec(filename, {stdio: 'inherit'});
@@ -544,8 +544,9 @@ process.exit(r.status === null ? 1 : r.status);
                 if rc or expired:
                     raise InfrastructureError(f'Docker container setup failed: {out or "timed out"}')
                 install_out = ''
-                if specs:
-                    install = ['python', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--target', '/work/.packages', *specs] if python else ['npm', 'install', '--no-audit', '--no-fund', '--', *specs]
+                install_specs = [*specs, TSX] if transpile else specs
+                if install_specs:
+                    install = ['python', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--target', '/work/.packages', *install_specs] if python else ['npm', 'install', '--no-audit', '--no-fund', '--', *install_specs]
                     install_out, rc, expired = command(['docker', 'exec', '--env', 'TMPDIR=/work', name, *install], directory, timeout - (time.monotonic() - started))
                 if rc or expired or 'SENTINEL_OUTPUT_LIMIT:' in install_out:
                     out = 'SENTINEL_INSTALL_FAILED\n' + install_out
@@ -554,7 +555,7 @@ process.exit(r.status === null ? 1 : r.status);
                         out, rc, expired = command(['docker', 'network', 'disconnect', 'bridge', name], directory, timeout - (time.monotonic() - started))
                         if rc or expired:
                             raise InfrastructureError(f'Docker network isolation failed: {out or "timed out"}')
-                    payload = json.dumps([packages, [], python, filename])
+                    payload = json.dumps([packages, [], python, filename, transpile, esm, True])
                     guarded = ['--env', 'SENTINEL_NETWORK_DISABLED=1', '--env', 'NODE_OPTIONS=--require=/work/network_guard.cjs'] if not allow_network else []
                     out, rc, expired = command(['docker', 'exec', *guarded, name, 'python' if python else 'node',
                                                'worker.py' if python else 'worker.cjs', payload], directory, timeout - (time.monotonic() - started))
