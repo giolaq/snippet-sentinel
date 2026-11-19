@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .extractor import extract
-from .runner import run
+from .runner import cleanup_stale, run
 from .storage import Store
 
 DEFAULT_MAX_SNIPPETS = 500
@@ -53,7 +53,7 @@ def github_url(value):
 
 
 def scan(source, db='sentinel.db', ref=None, lang=None, runner='docker', jobs=4, timeout=60, pins=(), run_id=None,
-         max_snippets=DEFAULT_MAX_SNIPPETS, progress=None):
+         max_snippets=DEFAULT_MAX_SNIPPETS, progress=None, allow_network=False):
     if max_snippets < 0:
         raise ValueError('max_snippets must be nonnegative (0 means unlimited)')
     progress = progress or (lambda message: None)
@@ -64,6 +64,8 @@ def scan(source, db='sentinel.db', ref=None, lang=None, runner='docker', jobs=4,
     store.set_run_settings(run_id, pins, timeout)
     sha = ''
     try:
+        if runner == 'docker':
+            cleanup_stale()
         with tempfile.TemporaryDirectory(prefix='sentinel-repo-') as temp:
             if remote:
                 progress('Cloning repository…')
@@ -104,8 +106,9 @@ def scan(source, db='sentinel.db', ref=None, lang=None, runner='docker', jobs=4,
             last_progress = time.monotonic()
             pool = ThreadPoolExecutor(max_workers=jobs)
             remaining = iter(enumerate(snippets))
+            network = (True,) if allow_network else ()
             try:
-                futures = {pool.submit(run, s, runner, timeout, pins): i for i, s in islice(remaining, jobs)}
+                futures = {pool.submit(run, s, runner, timeout, pins, *network): i for i, s in islice(remaining, jobs)}
                 done = 0
                 while futures:
                     ready, _ = wait(futures, return_when=FIRST_COMPLETED)
@@ -116,7 +119,7 @@ def scan(source, db='sentinel.db', ref=None, lang=None, runner='docker', jobs=4,
                             progress(f'{done}/{total} done')
                             last_progress = time.monotonic()
                     for i, s in islice(remaining, len(ready)):
-                        futures[pool.submit(run, s, runner, timeout, pins)] = i
+                        futures[pool.submit(run, s, runner, timeout, pins, *network)] = i
             except BaseException:
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise

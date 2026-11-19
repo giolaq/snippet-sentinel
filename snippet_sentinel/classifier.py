@@ -1,8 +1,8 @@
 import re
 
-BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout'}
+BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout', 'output_limit', 'disk_limit'}
 # Statuses that say nothing about whether the docs are right; excluded from broken percentages.
-INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context'}
+INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context', 'needs_network'}
 CAUGHT_AUTH_FAILURE = re.compile(r'AuthenticationError|Invalid API Key provided|Incorrect API key provided|'
                                  r'\b(?:statusCode|status)["\']?\s*[:=]\s*401\b|\b401 Unauthorized\b')
 ERROR_LINE = re.compile(
@@ -74,9 +74,13 @@ def context_reason(output, code):
     return None
 
 
-def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
+def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', network_disabled=False):
+    if 'SENTINEL_OUTPUT_LIMIT:' in stderr:
+        return 'output_limit'
     if timed_out:
         return 'timeout'
+    if exit_code != 0 and re.search(r'No space left on device|ENOSPC|Read-only file system|EROFS', stderr, re.I):
+        return 'disk_limit'
     if install_failed:
         return 'missing_dependency'
     if exit_code == 0:
@@ -85,6 +89,8 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code=''):
     summary = error_summary(stderr)
     if re.search(r'does not provide an export named', summary):
         return 'runtime_error'
+    if network_disabled and re.search(r'Network is unreachable|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|Temporary failure in name resolution|Name or service not known', summary, re.I):
+        return 'needs_network'
     if (re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token|Transform failed', summary, re.I)
             and not re.search(r'in JSON\b|is not valid JSON|Invalid JSON', summary)):
         return 'syntax_error'
