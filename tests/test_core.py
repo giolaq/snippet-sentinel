@@ -131,6 +131,8 @@ def test_classifier(message, code, expected):
     ('ReferenceError: item is not defined', 1, 'list.forEach((item) => 1);\nitem.go();', 'runtime_error'),
     ('ReferenceError: client is not defined', 1, '// const client = new Client();\nclient.request();', 'needs_context'),
     ('ReferenceError: client is not defined', 1, '/* const client = new Client(); */\nclient.request();', 'needs_context'),
+    ('ReferenceError: client is not defined', 1, "const url = 'https://x'; const client = 1;\n{ }\nclient.go();", 'runtime_error'),
+    ('ReferenceError: client is not defined', 1, "log('const client = 1');\nclient.go();", 'needs_context'),
 ])
 def test_javascript_verdicts(stderr, exit_code, code, expected):
     assert classify(stderr, exit_code, code=code) == expected

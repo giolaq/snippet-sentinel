@@ -13,7 +13,8 @@ def undefined_name(stderr, code):
     if not match:
         return None
     name = re.escape(match.group(1))
-    code = re.sub(r'/\*.*?\*/|(?<![:\w])//[^\n]*', '', code, flags=re.S)
+    code = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/|//[^\n]*''',
+                  lambda m: '""' if m.group(1) else '', code, flags=re.S)
     declared = (rf'\b(?:const|let|var|class|function\s*\*?)\s+{name}\b',
                 rf'\b(?:const|let|var)\s*[{{\[][^=;]*\b{name}\b',
                 rf'\bimport\b[^;]*?\b{name}\b[^;]*?\bfrom\b',
