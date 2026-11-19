@@ -41,16 +41,13 @@ def run(snippet, runner='docker', timeout=60, pins=()):
     packages = dependencies(snippet.code, snippet.lang)
     specs = pinned(packages, pins, snippet.lang)
     python = snippet.lang == 'python'
-    esm, wrap = javascript_mode(snippet.code) if not python else (False, False)
+    esm = javascript_mode(snippet.code) if not python else False
     filename = 'snippet.py' if python else ('snippet.mjs' if esm else 'snippet.cjs')
     name = 'sentinel-' + uuid.uuid4().hex
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='sentinel-') as directory:
         path = Path(directory)
-        code = snippet.code
-        if wrap:
-            code = '(async () => {\n' + code + '\n})().catch(error => { console.error(error); process.exitCode = 1; });\n'
-        path.joinpath(filename).write_text(code)
+        path.joinpath(filename).write_text(snippet.code)
         # A tiny worker keeps package discovery and execution identical across backends.
         worker = '''import json, subprocess, sys
 packages, specs, python, filename = json.loads(sys.argv[1])
@@ -73,11 +70,9 @@ sys.exit(subprocess.call([sys.executable if python else 'node', filename]))
 '''
         path.joinpath('worker.py').write_text(worker)
         payload = json.dumps([packages, specs, python, filename])
-        try:
-            if runner == 'docker':
-                # Node images have no Python, so use a native JS worker there.
-                if not python:
-                    js_worker = '''const {spawnSync} = require('node:child_process');
+        if not python:
+            js_worker = '''const {spawnSync} = require('node:child_process');
+const fs = require('node:fs');
 const [packages,specs,,filename] = JSON.parse(process.argv[2]);
 if (specs.length) {
  const p = spawnSync('npm', ['install','--no-audit','--no-fund','--',...specs], {encoding:'utf8'});
@@ -86,9 +81,26 @@ if (specs.length) {
 const p = spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'});
 const deps = JSON.parse(p.stdout || '{}').dependencies || {};
 console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries(packages.filter(x=>deps[x]).map(x=>[x,deps[x].version]))));
-const r = spawnSync('node',[filename],{stdio:'inherit'}); process.exit(r.status === null ? 1 : r.status);
+let r;
+if (filename.endsWith('.cjs')) {
+ r = spawnSync('node', [filename], {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
+ if (r.status !== 0 && /SyntaxError: await is only valid in async functions and the top level bodies of modules/.test(r.stderr || '')) {
+  const code = fs.readFileSync(filename, 'utf8');
+  const wrapped = 'snippet-async.cjs';
+  fs.writeFileSync(wrapped, '(async () => {\\n' + code + '\\n})().catch(error => { console.error(error); process.exitCode = 1; });\\n');
+  r = spawnSync('node', [wrapped], {stdio: 'inherit'});
+ } else if (r.stderr) {
+  process.stderr.write(r.stderr);
+ }
+} else {
+ r = spawnSync('node', [filename], {stdio: 'inherit'});
+}
+if (r.error) console.error(r.error);
+process.exit(r.status === null ? 1 : r.status);
 '''
-                    path.joinpath('worker.cjs').write_text(js_worker)
+            path.joinpath('worker.cjs').write_text(js_worker)
+        try:
+            if runner == 'docker':
                 # Copy instead of bind mounting: works with the dashboard's socket mount.
                 image = 'python:3.12-slim' if python else 'node:22-slim'
                 out, rc, expired = command(['docker', 'create', '--name', name, '--memory', '512m', '--cpus', '1',
@@ -119,7 +131,8 @@ const r = spawnSync('node',[filename],{stdio:'inherit'}); process.exit(r.status 
                     executable = str(path / 'venv/bin/python')
                 elif not shutil.which('node') or not shutil.which('npm'):
                     return {**result, 'status': 'runtime_error', 'stderr': 'Local JavaScript runner requires node and npm (UNSANDBOXED).'}
-                out, rc, expired = command([executable, 'worker.py', payload], directory, timeout - (time.monotonic() - started), env)
+                args = [executable, 'worker.py', payload] if python else ['node', 'worker.cjs', payload]
+                out, rc, expired = command(args, directory, timeout - (time.monotonic() - started), env)
             lines = []
             for line in out.splitlines():
                 if line.startswith('SENTINEL_VERSIONS='):

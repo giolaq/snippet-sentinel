@@ -64,26 +64,34 @@ def test_pins_and_esm():
 @pytest.mark.parametrize('code,esm', [
     ("const fs = require('node:fs'); async function main() { await Promise.resolve(); } main();", False),
     ("const fs = require('node:fs'); const main = async () => { await Promise.resolve(); }; main();", False),
-    ("const main = async () => await Promise.resolve(); main();", False),
+    ("const main = async () => await Promise.resolve(); main();", True),
     ("const fs = require('node:fs'); await Promise.resolve();", False),
     ("if (true) { await Promise.resolve(); }", True),
-    ("// import x from 'x'\nconsole.log('await import export');", False),
-    ("import('node:fs').then(() => {});", False),
+    ("// import x from 'x'\nconsole.log('await import export');", True),
+    ("import('node:fs').then(() => {});", True),
     ("import fs from 'node:fs'; await Promise.resolve();", True),
-    ('', False),
+    ('', True),
 ])
 def test_javascript_module_mode(code, esm):
     assert is_esm(code) is esm
 
 
-@pytest.mark.skipif(not shutil.which('node'), reason='Local Node required')
+@pytest.mark.parametrize('runner', ['local', pytest.param('docker', marks=[pytest.mark.docker, pytest.mark.skipif(not __import__('os').environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')])])
 @pytest.mark.parametrize('code,expected', [
     ("const fs = require('node:fs'); async function main() { await Promise.resolve(); } main();", 'pass'),
     ("const fs = require('node:fs'); await Promise.resolve();", 'pass'),
     ("const fs = require('node:fs'); await Promise.reject(new Error('broken'));", 'runtime_error'),
+    ("console.log(`${await Promise.resolve('value')}`);", 'pass'),
+    ("const f = async () => await Promise.resolve(1)\nawait f()", 'pass'),
+    ("const fs = require('node:fs'); console.log(`${await Promise.resolve('value')}`);", 'syntax_error'),
+    ("const fs = require('node:fs')\nconst f = async () => await Promise.resolve(1)\nawait f()", 'pass'),
+    ("const fs = require('node:fs'); const broken = ;", 'syntax_error'),
 ])
-def test_async_commonjs_execution(code, expected):
-    assert run(Snippet('js', 'a.md', 1, 'javascript', code), 'local')['status'] == expected
+def test_async_commonjs_execution(code, expected, runner):
+    if runner == 'local' and not shutil.which('node'):
+        pytest.skip('Local Node required')
+    result = run(Snippet('js', 'a.md', 1, 'javascript', code), runner)
+    assert result['status'] == expected, result['stderr']
 
 
 @pytest.mark.parametrize('message,code,expected', [('', 0, 'pass'), ('SyntaxError: x', 1, 'syntax_error'),
