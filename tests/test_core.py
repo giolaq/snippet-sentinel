@@ -477,7 +477,7 @@ def test_leaderboard_places_unassessed_runs_after_measured_runs(tmp_path):
     db = tmp_path / 'leaderboard.db'
     store = Store(db)
     for repo, statuses, error in [
-        ('measured', ['pass'], ''),
+        ('measured', ['pass'] * 10, ''),
         ('credentials', ['needs_credentials', 'skipped'], ''),
         ('failed', [], 'Docker unavailable'),
         ('running', None, ''),
@@ -490,7 +490,7 @@ def test_leaderboard_places_unassessed_runs_after_measured_runs(tmp_path):
     ]
     html = TestClient(create_app(db)).get('/').text
     assert html.count('0.0%') == 1
-    assert '0 of 1 checked' in html
+    assert '0 of 10 checked' in html
     assert 'No eligible snippets' in html
     assert html.count('Not available') == 2
     assert html.count('class="rank"') == 1
@@ -708,3 +708,13 @@ def test_python_optional_extra_raised_inside_sdk():
                '  File "/usr/local/lib/python3.12/site-packages/sdk/__init__.py", line 3, in <module>\n'
                "ImportError: cannot import name 'Thing' from 'sdk.core'")
     assert python_inconclusive('import sdk', 'runtime_error', removed) is None
+
+
+def test_leaderboard_does_not_rank_tiny_denominators(tmp_path):
+    db = tmp_path / 'leaderboard.db'
+    store = Store(db)
+    for repo, statuses in [('small', ['syntax_error', 'pass', 'pass'] + ['skipped'] * 11), ('big', ['pass'] * 9 + ['runtime_error'])]:
+        rid = store.start(repo)
+        store.finish(rid, [{'id': f'{repo}{i}', 'status': status, 'versions': {}} for i, status in enumerate(statuses)], {})
+    assert [(r['repo'], r['rankable']) for r in store.leaderboard()] == [('big', True), ('small', False)]
+
