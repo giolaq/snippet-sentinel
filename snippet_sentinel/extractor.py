@@ -79,7 +79,9 @@ def javascript_fragment(code):
     bare = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/''', '""', code, flags=re.S)
     if re.search(r'^\s*//[^\w\n]*before\b', code, re.I | re.M) and re.search(r'^\s*//[^\w\n]*after\b', code, re.I | re.M):
         return 'before/after comparison'
-    if re.search(r'''\bfrom\s*['"](?:npm|jsr):|\bimport\s*\(\s*['"](?:npm|jsr):''', code):
+    uncommented = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/|//[^\n]*''',
+                         lambda m: m.group(0) if m.group(1) else '', code, flags=re.S)
+    if re.search(r'''\bfrom\s*['"](?:npm|jsr):|\bimport\s*\(\s*['"](?:npm|jsr):''', uncommented):
         return 'Deno-only import'
     first = next((line for line in bare.splitlines() if line.strip() and not line.lstrip().startswith('//')), '')
     if re.match(r'\s*(?:await\s+)?\.[A-Za-z_$]', first):

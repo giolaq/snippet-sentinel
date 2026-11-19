@@ -512,6 +512,7 @@ def test_docker_versions():
 @pytest.mark.parametrize('code,expected', [
     ("// Before\nconst c = Stripe('k');\n\n// After\nconst c = new Stripe('k');", 'before/after comparison'),
     ("import Stripe from 'npm:stripe';", 'Deno-only import'),
+    ("import Stripe from 'stripe'; // Deno: import Stripe from 'npm:stripe';\nconst u = 'https://x';", ''),
     ("// \u274c Before (v22.0.0)\nconst t = {};\n\n// \u2705 After (v22.1.2+)\nconst t = {};", 'before/after comparison'),
     (".on('event', (event: AssistantStreamEvent) => ...)", 'method-chain fragment'),
     ("await .finalMessages() : Promise<Message[]>", 'method-chain fragment'),
