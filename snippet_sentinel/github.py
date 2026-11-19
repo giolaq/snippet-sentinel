@@ -84,7 +84,11 @@ class GitHub:
                 if not path.is_relative_to(root) or not path.is_file() or (root / fix['file']).is_symlink():
                     skipped.append(f"{fix['file']}:{fix['line']} (unsafe or missing file)")
                     continue
-                text = path.read_bytes().decode('utf-8')
+                try:
+                    text = path.read_bytes().decode('utf-8')
+                except UnicodeDecodeError:
+                    skipped.append(f"{fix['file']}:{fix['line']} (not UTF-8)")
+                    continue
                 changed = replace_fence(text, fix)
                 if changed is None:
                     skipped.append(f"{fix['file']}:{fix['line']} (original body mismatch)")

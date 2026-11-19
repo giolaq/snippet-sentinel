@@ -125,6 +125,10 @@ def test_github_flow(tmp_path, fork):
         calls.append(args)
         if args[0] == 'clone':
             (root / 'a.md').write_text('  ```py\n  old\n  ```\n')
+            (root / 'bad.md').write_bytes(b'```py\n\xff\n```\n')
+        if args[0] == 'push':
+            assert (root / 'a.md').read_text() == '  ```py\n  new\n  ```\n'
+            assert (root / 'bad.md').read_bytes() == b'```py\n\xff\n```\n'
         if args[0] == 'push' and args[1] == 'https://github.com/a/b' and fork:
             raise PermissionError('403')
         return ''
@@ -141,7 +145,9 @@ def test_github_flow(tmp_path, fork):
     client.api = api
     run = {'id': 1, 'repo': 'https://github.com/a/b', 'ref': 'a' * 40}
     fix = {'file': 'a.md', 'line': 2, 'original': 'old', 'proposed': 'new', 'verified': True, 'proposer': 'rules', 'error_before': 'before'}
-    assert client.open_pr(run, [fix])[0].endswith('/1')
+    url, skipped = client.open_pr(run, [fix, {**fix, 'file': 'bad.md'}])
+    assert url.endswith('/1')
+    assert skipped == ['bad.md:2 (not UTF-8)']
     assert ('checkout', '-b', 'sentinel/fix-1', 'a' * 40) in calls
     with pytest.raises(ValueError, match='No verified'):
         client.open_pr(run, [{**fix, 'verified': False}])
