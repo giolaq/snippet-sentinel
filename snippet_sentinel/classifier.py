@@ -51,7 +51,7 @@ def missing_env(stderr, code):
 
 def local_import(stderr):
     """A relative or absolute file import: the snippet expects a file from the reader's own project."""
-    match = re.search(r"Cannot find module '((?:\.{1,2}/|/)[^']+)' imported from \S*snippet\.", stderr)
+    match = re.search(r"Cannot find module '((?:\.{1,2}/|/)(?![^']*/node_modules/)[^']+)' imported from \S*snippet\.", stderr)
     return match and match.group(1)
 
 

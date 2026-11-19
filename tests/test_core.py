@@ -181,6 +181,7 @@ def test_classifier(message, code, expected):
     ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/components/EmailTemplate' imported from /work/snippet.jsx", 1, '', 'needs_context'),
     ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module './util.js' imported from /tmp/x/snippet.mjs", 1, '', 'needs_context'),
     ("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'ws' imported from /work/node_modules/openai/ws.mjs", 1, '', 'missing_dependency'),
+    ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/work/node_modules/openai/missing' imported from /work/snippet.mjs", 1, '', 'missing_dependency'),
     ("StripeAPIError: Invalid JSON received from the Stripe API\n  SyntaxError: Unexpected token '<', \"<!doctype \"... is not valid JSON", 1, '', 'runtime_error'),
     ("Error: Missing Azure OpenAI configuration", 1, "const e = process.env['AZURE_OPENAI_ENDPOINT'];\nif (!e) throw new Error('Missing Azure OpenAI configuration');", 'needs_credentials'),
     ("Error: Missing Azure OpenAI configuration", 1, "throw new Error('Missing Azure OpenAI configuration');", 'runtime_error'),
