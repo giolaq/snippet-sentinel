@@ -495,6 +495,7 @@ process.exit(r.status === null ? 1 : r.status);
                     '--read-only', '--tmpfs', '/work:rw,exec,nosuid,size=128m',
                     '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '--log-driver', 'none',
                     '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work:/work/.packages',
+                    '--env', 'PATH=/work/.packages/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
                     '--env', 'PYTHONDONTWRITEBYTECODE=1', '--workdir', '/work', image,
                     'python' if python else 'node', '-c' if python else '-e',
                     'import time; time.sleep(86400)' if python else 'setInterval(()=>{},86400000)'], directory, timeout)

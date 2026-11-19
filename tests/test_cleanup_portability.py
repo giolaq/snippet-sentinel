@@ -41,3 +41,11 @@ def test_cleanup_is_best_effort(monkeypatch, error):
 
     monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', fail)
     cleanup_stale()
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(not os.environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')
+def test_installed_console_script_is_on_path():
+    result = run(Snippet('black', 'a.md', 1, 'python', "import subprocess\nimport black\nsubprocess.run(['black','--version'],check=True)"), timeout=45)
+    assert result['status'] == 'pass', result
+    assert 'black,' in result['stderr']
