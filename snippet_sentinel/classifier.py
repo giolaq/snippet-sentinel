@@ -44,8 +44,8 @@ def undefined_name(stderr, code):
 
 
 def missing_env(stderr, code):
-    names = {a or b for a, b in re.findall(
-        r'process\.env(?:\.([A-Z][A-Z0-9_]+)(?![\w$])|\[\s*[\'"]([A-Z][A-Z0-9_]+)[\'"]\s*\])(?!\s*(?:\?\?|\|\|))', code)}
+    names = {a or b for a, b, _ in re.findall(
+        r'process\.env(?:\.([A-Z][A-Z0-9_]+)(?![\w$])|\[\s*[\'"]([A-Z][A-Z0-9_]+)[\'"]\s*\])(?!\s*(?:\?\?|\|\|)(?!\s*([\'"\x60])\3))', code)}
     unset = r'Error: Missing\b|Cannot read properties of undefined|\b(?:is )?(?:mandatory|required)\b'
     return bool(names) and (bool(re.search(unset, stderr)) or
                             any(re.search(rf'Error\b.*\b{re.escape(n)}\b', stderr) for n in names))
