@@ -688,6 +688,7 @@ def test_python_missing_import_from_installed_package():
     ('login()', 'timeout', 'Open this URL\n    Waiting for authorization......', 'needs_credentials'),
     ('snapshot_download("big")', 'timeout', 'Fetching 1004 files:   2%| 20/1004 [00:10<\nFetching 1004 files:   5%| 50/1004 [00:40<', 'skipped'),
     ('while True: pass', 'timeout', '', None),
+    ('scan_cache_dir()', 'runtime_error', 'huggingface_hub.errors.CacheNotFound: Cache directory not found: /root/.cache/huggingface/hub.', 'needs_context'),
 ])
 def test_python_inconclusive(code, status, output, expected):
     verdict = python_inconclusive(code, status, output)

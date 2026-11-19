@@ -199,6 +199,8 @@ def python_inconclusive(code, status, output):
         if len(re.findall(r'\b(\d+)/\d+ \[', output)) > 1 and re.search(r'Fetching \d+ files|Downloading', output):
             return 'skipped', 'Still downloading at the time limit; not evaluated.'
         return None
+    if re.search(r'^(?:\w+\.)*CacheNotFound: Cache directory not found', output, re.M):
+        return 'needs_context', 'Inspects the reader\'s local Hub cache, which is empty in a fresh sandbox.'
     error = final_error(output)
     if not error:
         return None
@@ -209,8 +211,6 @@ def python_inconclusive(code, status, output):
         return 'needs_context', f'The SDK needs an optional dependency the docs ask readers to install: {message[:120]}'
     if path := READER_INPUT.search(message):
         return 'needs_context', f'Needs a local file or directory the reader provides: {next(filter(None, path.groups()))}'
-    if name == 'CacheNotFound':
-        return 'needs_context', 'Inspects the reader\'s local Hub cache, which is empty in a fresh sandbox.'
     if re.search(r'\b404\b|not found', message, re.I):
         literals = [node.value for node in ast.walk(parse(code)) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
         placeholder = next((m[0] for value in literals for m in PLACEHOLDER_LITERAL.finditer(value) if m[0] in message), '')
