@@ -444,6 +444,7 @@ def run(snippet, runner='docker', timeout=60, pins=(), allow_network=False):
     name = 'sentinel-' + uuid.uuid4().hex
     started = time.monotonic()
     budget = [OUTPUT_LIMIT]
+    names = set()
 
     def execute(args, cwd, remaining, env=None, stdin=None):
         return command(args, cwd, remaining, env, stdin, budget)
@@ -543,83 +544,76 @@ process.exit(r.status === null ? 1 : r.status);
             path.joinpath('worker.cjs').write_text(js_worker % TSX)
         try:
             if runner == 'docker':
-                if _stopping.is_set():
-                    raise InfrastructureError('Scan interrupted')
-                with _lock:
-                    _active.add(name)
-                image = 'python:3.12-slim' if python else 'node:22-slim'
-                out, rc, expired = execute(['docker', 'create', '--name', name, '--memory', '512m', '--cpus', '1',
-                    '--pids-limit', '256', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-                    '--label', f'{SANDBOX_LABEL}=true', '--label', f'snippet-sentinel.owner={owner_identity()}',
-                    '--label', f'snippet-sentinel.namespace={owner_namespace()}',
-                    '--label', f'snippet-sentinel.owner-container={owner_container()}',
-                    '--read-only', '--tmpfs', '/work:rw,exec,nosuid,size=128m',
-                    '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '--log-driver', 'none',
-                    '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work:/work/.packages',
-                    '--env', 'PATH=/work/.packages/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-                    '--env', 'PYTHONDONTWRITEBYTECODE=1', '--workdir', '/work', image,
-                    'python' if python else 'node', '-c' if python else '-e',
-                    'import time; time.sleep(86400)' if python else 'setInterval(()=>{},86400000)'], directory, timeout)
-                if rc or expired:
-                    raise InfrastructureError(f'Docker container creation failed (image/daemon unavailable): {out or "timed out"}')
-                if _stopping.is_set():
-                    raise InfrastructureError('Scan interrupted')
-                out, rc, expired = execute(['docker', 'start', name], directory, timeout - (time.monotonic() - started))
-                if rc or expired:
-                    raise InfrastructureError(f'Docker container start failed: {out or "timed out"}')
-                with tempfile.TemporaryFile() as archive:
-                    with tarfile.open(fileobj=archive, mode='w') as tar:
-                        tar.add(directory, arcname='.')
-                    archive.seek(0)
-                    out, rc, expired = execute(['docker', 'exec', '-i', name, 'tar', '--no-same-owner', '-x', '-C', '/work'],
-                                              directory, timeout - (time.monotonic() - started), stdin=archive)
-                if rc or expired:
-                    raise InfrastructureError(f'Docker container setup failed: {out or "timed out"}')
-                install_out = ''
-                install_specs = [*specs, TSX] if transpile else specs
-                if install_specs:
-                    install = ['python', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--target', '/work/.packages', *install_specs] if python else ['npm', 'install', '--no-audit', '--no-fund', '--', *install_specs]
-                    install_out, rc, expired = execute(['docker', 'exec', '--env', 'TMPDIR=/work', name, *install], directory, timeout - (time.monotonic() - started))
-                if rc or expired or 'SENTINEL_OUTPUT_LIMIT:' in install_out:
-                    out = 'SENTINEL_INSTALL_FAILED\n' + install_out
-                else:
-                    if not allow_network:
-                        out, rc, expired = execute(['docker', 'network', 'disconnect', 'bridge', name], directory, timeout - (time.monotonic() - started))
-                        if rc or expired:
-                            raise InfrastructureError(f'Docker network isolation failed: {out or "timed out"}')
-                    payload = json.dumps([packages, [], python, filename, transpile, esm, True])
-                    guarded = ['--env', 'SENTINEL_NETWORK_DISABLED=1', '--env', 'NODE_OPTIONS=--require=/work/network_guard.cjs'] if not allow_network else []
-                    out, rc, expired = execute(['docker', 'exec', *guarded, name, 'python' if python else 'node',
-                                               'worker.py' if python else 'worker.cjs', payload], directory, timeout - (time.monotonic() - started))
-                    peers = []
-                    while not python and not allow_network and rc == 86 and not expired and 'SENTINEL_OUTPUT_LIMIT:' not in out:
-                        peer = re.search(r'^SENTINEL_NEED_PEER=((?:@[\w.-]+/)?[A-Za-z0-9][\w.-]*)$', out, re.M)
-                        if not peer or peer[1] in peers or len(peers) == 3:
-                            break
-                        peers.append(peer[1])
-                        idle = "const fs=require('node:fs'); for(const pid of fs.readdirSync('/proc').filter(p=>/^\\d+$/.test(p)&&p!=='1'&&+p!==process.pid)){try{if(!/\\) Z /.test(fs.readFileSync('/proc/'+pid+'/stat','utf8')))process.exit(1)}catch(e){if(e.code!=='ENOENT')throw e}}"
-                        check, check_rc, check_expired = execute(['docker', 'exec', name, 'node', '-e', idle], directory, timeout - (time.monotonic() - started))
-                        if check_rc or check_expired or 'SENTINEL_OUTPUT_LIMIT:' in check:
-                            out, rc, expired = check + '\nRuntimeError: Cannot install optional peer while snippet processes remain', check_rc or 1, check_expired
-                            break
-                        connected, connect_rc, connect_expired = execute(['docker', 'network', 'connect', 'bridge', name], directory, timeout - (time.monotonic() - started))
-                        if connect_rc or connect_expired:
-                            if connect_expired or 'SENTINEL_OUTPUT_LIMIT:' in connected:
-                                out, rc, expired = connected, connect_rc, connect_expired
-                                break
-                            raise InfrastructureError(f'Docker dependency network setup failed: {connected or "timed out"}')
-                        install_out, rc, expired = execute(['docker', 'exec', '--env', 'TMPDIR=/work', name, 'npm', 'install', '--no-audit', '--no-fund', '--', peer[1]], directory, timeout - (time.monotonic() - started))
-                        if rc or expired or 'SENTINEL_OUTPUT_LIMIT:' in install_out:
-                            out = 'SENTINEL_INSTALL_FAILED\n' + install_out
-                            break
-                        isolated, isolate_rc, isolate_expired = execute(['docker', 'network', 'disconnect', 'bridge', name], directory, timeout - (time.monotonic() - started))
-                        if isolate_rc or isolate_expired:
-                            if isolate_expired or 'SENTINEL_OUTPUT_LIMIT:' in isolated:
-                                out, rc, expired = isolated, isolate_rc, isolate_expired
-                                break
-                            raise InfrastructureError(f'Docker network isolation failed: {isolated or "timed out"}')
+                peers = []
+                while True:
+                    if time.monotonic() - started >= timeout:
+                        out, rc, expired = '', -9, True
+                        break
+                    if _stopping.is_set():
+                        raise InfrastructureError('Scan interrupted')
+                    names.add(name)
+                    with _lock:
+                        _active.add(name)
+                    image = 'python:3.12-slim' if python else 'node:22-slim'
+                    out, rc, expired = execute(['docker', 'create', '--name', name, '--memory', '512m', '--cpus', '1',
+                        '--pids-limit', '256', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                        '--label', f'{SANDBOX_LABEL}=true', '--label', f'snippet-sentinel.owner={owner_identity()}',
+                        '--label', f'snippet-sentinel.namespace={owner_namespace()}',
+                        '--label', f'snippet-sentinel.owner-container={owner_container()}',
+                        '--read-only', '--tmpfs', '/work:rw,exec,nosuid,size=128m',
+                        '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '--log-driver', 'none',
+                        '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work:/work/.packages',
+                        '--env', 'PATH=/work/.packages/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                        '--env', 'PYTHONDONTWRITEBYTECODE=1', '--workdir', '/work', image,
+                        '/usr/local/bin/python' if python else '/usr/local/bin/node', '-c' if python else '-e',
+                        'import time; time.sleep(86400)' if python else 'setInterval(()=>{},86400000)'], directory, timeout - (time.monotonic() - started))
+                    if rc or expired:
+                        raise InfrastructureError(f'Docker container creation failed (image/daemon unavailable): {out or "timed out"}')
+                    if _stopping.is_set():
+                        raise InfrastructureError('Scan interrupted')
+                    out, rc, expired = execute(['docker', 'start', name], directory, timeout - (time.monotonic() - started))
+                    if rc or expired:
+                        raise InfrastructureError(f'Docker container start failed: {out or "timed out"}')
+                    with tempfile.TemporaryFile() as archive:
+                        with tarfile.open(fileobj=archive, mode='w') as tar:
+                            tar.add(directory, arcname='.')
+                        archive.seek(0)
+                        out, rc, expired = execute(['docker', 'exec', '-i', name, '/bin/tar', '--no-same-owner', '-x', '-C', '/work'],
+                                                  directory, timeout - (time.monotonic() - started), stdin=archive)
+                    if rc or expired:
+                        raise InfrastructureError(f'Docker container setup failed: {out or "timed out"}')
+                    install_out = ''
+                    install_specs = [*specs, *peers, *([TSX] if transpile else [])]
+                    if install_specs:
+                        install = ['/usr/local/bin/python', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--target', '/work/.packages', *install_specs] if python else ['/usr/local/bin/npm', 'install', '--no-audit', '--no-fund', '--', *install_specs]
+                        install_out, rc, expired = execute(['docker', 'exec', '--env', 'TMPDIR=/work', '--env', 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', name, *install], directory, timeout - (time.monotonic() - started))
+                    if rc or expired or 'SENTINEL_OUTPUT_LIMIT:' in install_out:
+                        out = 'SENTINEL_INSTALL_FAILED\n' + install_out
+                    else:
+                        if not allow_network:
+                            out, rc, expired = execute(['docker', 'network', 'disconnect', 'bridge', name], directory, timeout - (time.monotonic() - started))
+                            if rc or expired:
+                                raise InfrastructureError(f'Docker network isolation failed: {out or "timed out"}')
                         payload = json.dumps([[*packages, *peers], [], python, filename, transpile, esm, True])
-                        out, rc, expired = execute(['docker', 'exec', *guarded, name, 'node', 'worker.cjs', payload], directory, timeout - (time.monotonic() - started))
+                        guarded = ['--env', 'SENTINEL_NETWORK_DISABLED=1', '--env', 'NODE_OPTIONS=--require=/work/network_guard.cjs'] if not allow_network else []
+                        out, rc, expired = execute(['docker', 'exec', *guarded, name, '/usr/local/bin/python' if python else '/usr/local/bin/node',
+                                                   'worker.py' if python else 'worker.cjs', payload], directory, timeout - (time.monotonic() - started))
+                    if python or allow_network or rc != 86 or expired or 'SENTINEL_OUTPUT_LIMIT:' in out:
+                        break
+                    peer = re.search(r'^SENTINEL_NEED_PEER=((?:@[\w.-]+/)?[A-Za-z0-9][\w.-]*)$', out, re.M)
+                    if not peer or peer[1] in peers or len(peers) == 3:
+                        break
+                    removed, remove_rc, remove_expired = execute(['docker', 'rm', '-f', name], directory, timeout - (time.monotonic() - started))
+                    if remove_rc or remove_expired:
+                        if remove_expired or 'SENTINEL_OUTPUT_LIMIT:' in removed:
+                            out, rc, expired = removed, remove_rc, remove_expired
+                            break
+                        raise InfrastructureError(f'Docker sandbox removal failed before peer installation: {removed}')
+                    names.discard(name)
+                    with _lock:
+                        _active.discard(name)
+                    peers.append(peer[1])
+                    name = 'sentinel-' + uuid.uuid4().hex
             else:
                 env = {'PATH': os.environ.get('PATH', ''), 'HOME': directory, 'LANG': 'C.UTF-8'}
                 executable = sys.executable
@@ -679,11 +673,12 @@ process.exit(r.status === null ? 1 : r.status);
             result.update(status='runtime_error', stderr=str(exc))
         finally:
             if runner == 'docker':
-                try:
-                    subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=10)
-                except (OSError, subprocess.SubprocessError):
-                    pass
-                finally:
-                    with _lock:
-                        _active.discard(name)
+                for name in names:
+                    try:
+                        subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=10)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+                    finally:
+                        with _lock:
+                            _active.discard(name)
     return result

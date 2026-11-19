@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from snippet_sentinel.extractor import Snippet
-from snippet_sentinel.runner import command, run
+from snippet_sentinel.runner import InfrastructureError, command, run
 
 
 @pytest.mark.parametrize('peers,expected,installs', [
@@ -25,11 +25,13 @@ def test_host_peer_retry_is_bounded_and_isolated(monkeypatch, peers, expected, i
         calls.append(args)
         limits.append(timeout)
         budgets.append(budget)
+        if args[:2] == ['docker', 'create']:
+            connected = True
         if args[:3] == ['docker', 'network', 'disconnect']:
             connected = False
         elif args[:3] == ['docker', 'network', 'connect']:
             connected = True
-        if 'npm' in args:
+        if '/usr/local/bin/npm' in args:
             assert connected
         if 'worker.cjs' in args:
             assert not connected
@@ -45,7 +47,11 @@ def test_host_peer_retry_is_bounded_and_isolated(monkeypatch, peers, expected, i
     monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *a, **kw: None)
     result = run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
     assert result['status'] == expected, result
-    assert [args[-1] for args in calls if 'npm' in args] == installs
+    assert [args[args.index('--') + 1:] for args in calls if '/usr/local/bin/npm' in args] == [installs[:i + 1] for i in range(len(installs))]
+    created = [args[args.index('--name') + 1] for args in calls if args[:2] == ['docker', 'create']]
+    assert len(created) == len(installs) + 1
+    assert len(set(created)) == len(created)
+    assert not any(args[:3] == ['docker', 'network', 'connect'] for args in calls)
     assert all(budget is budgets[0] for budget in budgets)
     assert limits == sorted(limits, reverse=True)
     if expected == 'pass':
@@ -53,7 +59,7 @@ def test_host_peer_retry_is_bounded_and_isolated(monkeypatch, peers, expected, i
 
 
 @pytest.mark.parametrize('failure,expected', [('install', 'missing_dependency'), ('timeout', 'timeout'),
-                                            ('output', 'output_limit'), ('alive', 'runtime_error')])
+                                            ('output', 'output_limit')])
 def test_failed_peer_setup_never_reexecutes_snippet(monkeypatch, failure, expected):
     calls = []
 
@@ -61,11 +67,9 @@ def test_failed_peer_setup_never_reexecutes_snippet(monkeypatch, failure, expect
         calls.append(args)
         if 'worker.cjs' in args:
             return "Error: Cannot find module 'ws'\nSENTINEL_NEED_PEER=ws", 86, False
-        if 'npm' in args:
+        if '/usr/local/bin/npm' in args:
             return ('SENTINEL_OUTPUT_LIMIT: output limit exceeded' if failure == 'output' else 'install failed',
                     1, failure == 'timeout')
-        if failure == 'alive' and '-e' in args and '/proc' in args[-1]:
-            return '', 1, False
         return '', 0, False
 
     monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
@@ -73,8 +77,7 @@ def test_failed_peer_setup_never_reexecutes_snippet(monkeypatch, failure, expect
     result = run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
     assert result['status'] == expected, result
     assert sum('worker.cjs' in args for args in calls) == 1
-    if failure == 'alive':
-        assert not any(args[:3] == ['docker', 'network', 'connect'] for args in calls)
+    assert not any(args[:3] == ['docker', 'network', 'connect'] for args in calls)
 
 
 def test_command_output_budget_is_shared(tmp_path):
@@ -84,6 +87,24 @@ def test_command_output_budget_is_shared(tmp_path):
     second, _, _ = command(args, tmp_path, 5, budget=budget)
     assert 'SENTINEL_OUTPUT_LIMIT' not in first
     assert 'SENTINEL_OUTPUT_LIMIT' in second
+
+
+def test_peer_removal_failure_never_creates_a_networked_replacement(monkeypatch):
+    calls = []
+
+    def fake_command(args, *unused):
+        calls.append(args)
+        if 'worker.cjs' in args:
+            return 'SENTINEL_NEED_PEER=ws', 86, False
+        if args[:3] == ['docker', 'rm', '-f']:
+            return 'removal refused', 1, False
+        return '', 0, False
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', fake_command)
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *a, **kw: None)
+    with pytest.raises(InfrastructureError, match='removal refused'):
+        run(Snippet('peer', 'a.md', 1, 'javascript', 'console.log(1)'))
+    assert sum(args[:2] == ['docker', 'create'] for args in calls) == 1
 
 
 def test_placeholder_precedes_dns_diagnostic(monkeypatch):
@@ -113,12 +134,15 @@ def test_docker_missing_sdk_peer_installs_only_between_isolated_attempts(monkeyp
 
     def checked_command(args, *a, **kw):
         nonlocal connected
+        if args[:2] == ['docker', 'create']:
+            connected = True
         if args[:3] == ['docker', 'network', 'disconnect']:
             connected = False
         elif args[:3] == ['docker', 'network', 'connect']:
             connected = True
-        if 'npm' in args:
+        if '/usr/local/bin/npm' in args:
             assert connected
+            assert 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' in args
             installs.append(args)
         if 'worker.cjs' in args:
             assert connected == allow_network
@@ -146,7 +170,7 @@ console.log('optional peer loaded offline');
     assert 'optional peer loaded offline' in result['stderr']
     assert result['versions']['ws']
     assert len(attempts) == (1 if allow_network else 2)
-    assert any(args[-1] == 'ws' for args in installs) == (not allow_network)
+    assert any('ws' in args[args.index('--') + 1:] for args in installs) == (not allow_network)
 
 
 @pytest.mark.docker
@@ -155,3 +179,49 @@ def test_docker_offline_placeholder_is_skipped():
     result = run(Snippet('placeholder', 'a.md', 1, 'javascript', "await fetch('https://example.com')"))
     assert result['status'] == 'skipped', result
     assert 'placeholder host: example.com' in result['reason']
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(not os.environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')
+@pytest.mark.parametrize('attack', ['npm', 'detached'])
+def test_peer_retry_destroys_poisoned_sandbox_before_networked_install(monkeypatch, attack):
+    original = command
+    attempts, removed = [], []
+
+    def checked_command(args, *a, **kw):
+        assert args[:3] != ['docker', 'network', 'connect']
+        if 'worker.cjs' in args:
+            attempts.append(args[args.index('worker.cjs') - 2])
+        if args[:3] == ['docker', 'rm', '-f']:
+            assert args[-1] == attempts[0]
+            if attack == 'detached':
+                probe = "const fs=require('node:fs');const rows=fs.readdirSync('/proc').filter(p=>/^\\d+$/.test(p)).flatMap(p=>{try{return [fs.readFileSync('/proc/'+p+'/stat','utf8')]}catch{return []}});if(!rows.some(s=>s.includes('evil ) Z ')&&!s.slice(s.lastIndexOf(')')+1).trimStart().startsWith('Z')))process.exit(1);if(Object.keys(require('node:os').networkInterfaces()).some(n=>n!=='lo'))process.exit(2);"
+                out, rc, expired = original(['docker', 'exec', args[-1], '/usr/local/bin/node', '-e', probe], a[0], 5)
+                assert rc == 0 and not expired, out
+            removed.append(args[-1])
+        if '/usr/local/bin/npm' in args:
+            assert removed == attempts[:1]
+            assert attempts[0] not in args
+            assert 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' in args
+            name = args[args.index('/usr/local/bin/npm') - 1]
+            out, rc, expired = original(['docker', 'exec', name, '/usr/local/bin/node', '-e', "if(require('node:fs').existsSync('/work/.packages/bin/npm'))process.exit(1)"], a[0], 5)
+            assert rc == 0 and not expired, out
+            _, rc, _ = original(['docker', 'inspect', attempts[0]], a[0], 5)
+            assert rc != 0
+        return original(args, *a, **kw)
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', checked_command)
+    payload = ("fs.mkdirSync('/work/.packages/bin',{recursive:true});fs.writeFileSync('/work/.packages/bin/npm','#!/bin/sh\\necho SENTINEL_PLANTED_NPM\\n',{mode:0o755});"
+               if attack == 'npm' else
+               "const child=require('node:child_process').spawn('/usr/local/bin/node',['-e',\"process.title='evil ) Z worker';require('node:fs').writeFileSync('/proc/self/comm','evil ) Z worker');setInterval(()=>{},1000)\"],{detached:true,stdio:'ignore'});child.unref();require('node:child_process').execFileSync('/bin/sleep',['0.2']);")
+    code = "const fs=require('node:fs');let missing=false;try{require.resolve('ws')}catch{missing=true}if(missing){" + payload + "}" + """
+fs.mkdirSync('node_modules/fixture-sdk',{recursive:true});
+fs.writeFileSync('node_modules/fixture-sdk/index.cjs','module.exports = require(' + JSON.stringify('ws') + ');');
+const sdk=require('./node_modules/fixture-sdk/index.cjs');
+require('node:assert').equal(typeof sdk.WebSocket,'function');
+"""
+    result = run(Snippet('attack', 'a.md', 1, 'javascript', code))
+    assert result['status'] == 'pass', result
+    assert len(attempts) == 2 and attempts[0] != attempts[1]
+    assert removed == attempts[:1]
+    assert 'SENTINEL_PLANTED_NPM' not in result['stderr']

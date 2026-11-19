@@ -19,7 +19,7 @@ def test_transpiler_installed_before_isolation(monkeypatch):
     monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda *args, **kwargs: None)
     result = run(Snippet('ts', 'a.md', 1, 'typescript', 'const value: number = 1;'))
     assert result['status'] == 'pass'
-    install = next(i for i, args in enumerate(calls) if 'npm' in args and 'install' in args)
+    install = next(i for i, args in enumerate(calls) if '/usr/local/bin/npm' in args and 'install' in args)
     disconnect = next(i for i, args in enumerate(calls) if args[:3] == ['docker', 'network', 'disconnect'])
     execute = next(i for i, args in enumerate(calls) if 'worker.cjs' in args)
     assert install < disconnect < execute
