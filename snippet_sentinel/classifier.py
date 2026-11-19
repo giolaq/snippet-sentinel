@@ -92,7 +92,7 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', 
     error = final_error(stderr)
     summary = error[0] if error else stderr.strip() if '\n' not in stderr.strip() else ''
     network_error = (error and (error['name'] in CONNECTION_ERRORS or
-                               (error['name'] in {'Error', 'OSError', 'TypeError', 'AxiosError', 'FetchError', 'RequestError'}
+                               (error['name'] in {'Error', 'OSError', 'URLError', 'TypeError', 'AxiosError', 'FetchError', 'RequestError'}
                                 and NETWORK_FAILURE.search(summary)))) or (not error and NETWORK_FAILURE.search(summary))
     if network_disabled and ((network_error and exit_code != 0) or (blocked and exit_code == 0)):
         return 'needs_network'

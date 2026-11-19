@@ -124,6 +124,8 @@ def test_host_evidence_survives_output_truncation(tmp_path):
 @pytest.mark.parametrize('backend,allowed,terminal,expired,host,expected,checked', [
     ('docker', False, 'ConnectError: blocked', False, 'dead.example', 'runtime_error', True),
     ('docker', False, 'ConnectError: blocked', False, None, 'needs_network', True),
+    ('docker', False, 'urllib.error.URLError: <urlopen error Network disabled by Snippet Sentinel>', False, 'dead.example', 'runtime_error', True),
+    ('docker', False, 'urllib.error.URLError: <urlopen error Network disabled by Snippet Sentinel>', False, None, 'needs_network', True),
     ('docker', False, 'ConnectError: blocked', True, 'dead.example', 'runtime_error', True),
     ('docker', False, 'ConnectError: blocked', True, None, 'needs_network', True),
     ('docker', False, 'ValueError: broken', False, 'dead.example', 'runtime_error', False),
@@ -152,6 +154,7 @@ def test_runner_dns_verdicts(monkeypatch, backend, allowed, terminal, expired, h
 @pytest.mark.skipif(not os.environ.get('SENTINEL_DOCKER_TESTS'), reason='Set SENTINEL_DOCKER_TESTS=1')
 @pytest.mark.parametrize('lang,code', [
     ('python', "import socket\nsocket.create_connection(('dead-docs.invalid', 443))"),
+    ('python', "import urllib.request\nurllib.request.urlopen('https://dead-docs.invalid')"),
     ('javascript', "await fetch('https://dead-docs.invalid')"),
 ])
 def test_docker_dead_host_evidence(monkeypatch, lang, code):

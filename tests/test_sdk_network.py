@@ -68,6 +68,18 @@ def test_terminal_connection_failure_is_inconclusive(terminal):
     assert classify(MARKER + '\n' + terminal, 1, network_disabled=True) == 'needs_network'
 
 
+@pytest.mark.parametrize('terminal,expected', [
+    ('urllib.error.URLError: <urlopen error [Errno -3] Network disabled by Snippet Sentinel>', 'needs_network'),
+    ('urllib.error.URLError: <urlopen error unknown url type: wrong>', 'runtime_error'),
+    ('urllib.error.URLError: <urlopen error >', 'runtime_error'),
+    ('urllib.error.URLError: <urlopen error Network disabled by Snippet Sentinel>\n\nValueError: bad input', 'runtime_error'),
+])
+def test_urllib_network_failure_requires_terminal_network_reason(terminal, expected):
+    output = MARKER + '\n' + terminal
+    assert classify(output, 1, network_disabled=True) == expected
+    assert classify(output, 1) == 'runtime_error'
+
+
 @pytest.mark.parametrize('status,reason', [(401, 'Unauthorized'), (403, 'Forbidden')])
 def test_requests_terminal_auth_failure(status, reason):
     output = f'requests.exceptions.HTTPError: {status} Client Error: {reason} for url: https://example.com'
@@ -80,6 +92,7 @@ def test_caught_requests_401():
 
 
 CASES = [
+    ('python', "import urllib.request\nurllib.request.urlopen('https://example.com')", 'needs_network'),
     ('python', "import requests\nresponse=requests.Response()\nresponse.status_code=401\nresponse.reason='Unauthorized'\nresponse.url='https://example.com'\nresponse.raise_for_status()", 'needs_credentials'),
     ('python', "from openai import OpenAI\nOpenAI().chat.completions.create(model='gpt-4o-mini',messages=[{'role':'user','content':'hello'}])", 'needs_credentials'),
     ('python', "import os\nos.environ['OPENAI_API_KEY']='sentinel-dummy-key'\nfrom openai import OpenAI\nOpenAI().chat.completions.create(model='gpt-4o-mini',messages=[{'role':'user','content':'hello'}])", 'needs_network'),
