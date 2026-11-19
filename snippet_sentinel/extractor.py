@@ -96,7 +96,9 @@ def extract(root):
                         stats['unsupported'] += 1
                     continue
                 code = '\n'.join(body)
-                transcript = raw_lang == 'pycon' or code.lstrip().startswith('>>> ')
+                first_content = next((line.strip() for line in body
+                                      if line.strip() and not line.lstrip().startswith('#')), '')
+                transcript = raw_lang == 'pycon' or first_content.startswith('>>> ')
                 shell = lang == 'python' and bool(code.strip()) and all(
                     SHELL_LINE.match(line) for line in body if line.strip() and not line.lstrip().startswith('#')
                 ) and any(SHELL_LINE.match(line) for line in body)

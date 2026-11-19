@@ -289,6 +289,12 @@ def test_unclosed_fence_at_eof(tmp_path):
     assert snippets[0].expected_error == ''
 
 
+def test_commented_python_repl_transcript(tmp_path):
+    (tmp_path / 'a.md').write_text('\x60\x60\x60python\n# Interactive example\n\n>>> print(1)\n1\n\x60\x60\x60\n')
+    snippets, _ = extract(tmp_path)
+    assert snippets[0].reason == 'REPL transcript'
+
+
 def test_extract_non_runnable_python_blocks(tmp_path):
     (tmp_path / 'a.md').write_text(
         '\x60\x60\x60python\n$ pip install sdk\n\x60\x60\x60\n'
