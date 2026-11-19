@@ -10,6 +10,21 @@ from snippet_sentinel.storage import Store
 from snippet_sentinel.web import create_app
 
 
+@pytest.mark.parametrize('endpoint,status', [('/runs/999/fix', 404), ('/runs/999/fix/pr', 400)])
+@pytest.mark.parametrize('headers,allowed', [
+    ({}, True), ({'Origin': 'http://testserver'}, True),
+    ({'Referer': 'http://testserver/runs/999'}, True),
+    ({'Origin': 'https://evil.test'}, False),
+    ({'Referer': 'http://evil.test/form'}, False),
+    ({'Origin': 'null'}, False),
+    ({'Origin': 'http://testserver:8080'}, False),
+    ({'Origin': 'http://evil.test', 'Referer': 'http://testserver/'}, False),
+])
+def test_fix_posts_require_same_origin(tmp_path, endpoint, status, headers, allowed):
+    web = TestClient(create_app(tmp_path / 's.db'))
+    assert web.post(endpoint, headers=headers).status_code == (status if allowed else 403)
+
+
 @pytest.mark.parametrize('lang,code,error,expected', [
     ('python', 'print(os.name)', "NameError: name 'os' is not defined", 'import os\nprint(os.name)'),
     ('python', 'print "hi"', 'SyntaxError', 'print("hi")'),

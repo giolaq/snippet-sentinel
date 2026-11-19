@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -70,6 +70,21 @@ def render_run(run, static=False, status=''):
     return templates.get_template('run.html').render(run=run, static=static, status=status)
 
 
+def require_same_origin(request):
+    source = request.headers.get('origin', request.headers.get('referer'))
+    if source is None:
+        return
+    try:
+        parsed = urlsplit(source)
+        target = urlsplit(str(request.url))
+        def origin(url):
+            return url.scheme.lower(), url.hostname, url.port or (443 if url.scheme == 'https' else 80)
+        if parsed.scheme not in {'http', 'https'} or origin(parsed) != origin(target):
+            raise ValueError('Origin mismatch')
+    except ValueError:
+        raise HTTPException(403, 'Cross-origin POST requests are not allowed') from None
+
+
 def create_app(db='sentinel.db'):
     app = FastAPI(title='Snippet Sentinel')
     store = Store(db)
@@ -110,7 +125,8 @@ def create_app(db='sentinel.db'):
         return render_run(run, status=status)
 
     @app.post('/runs/{run_id}/fix')
-    def propose(run_id: int, background: BackgroundTasks):
+    def propose(run_id: int, request: Request, background: BackgroundTasks):
+        require_same_origin(request)
         run = store.get(run_id)
         if not run:
             raise HTTPException(404, 'Run not found')
@@ -123,7 +139,8 @@ def create_app(db='sentinel.db'):
         return RedirectResponse(f'/runs/{run_id}', status_code=303)
 
     @app.post('/runs/{run_id}/fix/pr')
-    def open_pr(run_id: int, background: BackgroundTasks):
+    def open_pr(run_id: int, request: Request, background: BackgroundTasks):
+        require_same_origin(request)
         job = store.fix_job(run_id)
         if not job:
             raise HTTPException(400, 'No verified fixes available; propose fixes first')
