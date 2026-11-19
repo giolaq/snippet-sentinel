@@ -214,4 +214,33 @@ def test_dashboard_uses_default_cap(tmp_path, monkeypatch):
     stored = Store(db).get(1)
     assert stored['stats']['selected'] == 500 and stored['stats']['truncated'] == 1
     page = client.get(response.headers['location']).text
-    assert 'Partial scan: checked the first 500 of 501 snippets' in page
+    assert 'Partial scan: selected the first 500 snippets (1 omitted)' in page
+
+
+@pytest.mark.parametrize('finished,ref,expected', [(False, 'no-such-branch', 'Branch/tag no-such-branch'),
+                                                (True, 'abcdef0123456789', 'Commit abcdef0'),
+                                                (False, '', 'No commit recorded')])
+def test_pending_ref_is_not_presented_as_a_commit(finished, ref, expected):
+    page = render_run(dict(id=1, repo='https://github.com/a/b', started='', finished=finished, ref=ref,
+                           counts={}, stats={}, results=[], error=''))
+    assert expected in page
+    if not finished:
+        assert ' · Commit ' not in page
+
+
+def test_docker_failure_guidance_cli_and_dashboard(tmp_path, monkeypatch, capsys):
+    (tmp_path / 'a.md').write_text('```python\nprint(1)\n```')
+    db = tmp_path / 'scan.db'
+    monkeypatch.setattr('snippet_sentinel.runner.command', lambda *a, **kw: ('Cannot connect to the Docker daemon: connection refused', 1, False))
+    monkeypatch.setattr('snippet_sentinel.runner.subprocess.run', lambda args, **kw: subprocess.CompletedProcess(args, 0, '', ''))
+    monkeypatch.setattr('sys.argv', ['snippet-sentinel', 'scan', str(tmp_path), '--db', str(db)])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 1
+    guidance = "Docker couldn't run this snippet — start Docker (or check DOCKER_HOST) and retry."
+    output = capsys.readouterr().err
+    assert guidance in output and 'Cannot connect to the Docker daemon' in output
+    stored = Store(db).get(1)['error']
+    assert stored.startswith(guidance + '\n')
+    page = unescape(TestClient(create_app(db)).get('/runs/1').text)
+    assert guidance in page and 'Cannot connect to the Docker daemon' in page

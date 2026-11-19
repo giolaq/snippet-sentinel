@@ -7,7 +7,7 @@
 <div class="run-intro">
   <p class="eyebrow">Documentation scan #{{ run.id }}</p>
   <h1>{{ run.repo_name }}</h1>
-  <p class="muted">Started <time datetime="{{ run.started }}">{{ run.started|readable_date }}</time>{% if run.ref %} · Commit {{ run.ref[:7] }}{% else %} · No commit recorded{% endif %}</p>
+  <p class="muted">Started <time datetime="{{ run.started }}">{{ run.started|readable_date }}</time>{% if run.ref %}{% if run.finished %} · Commit {{ run.ref[:7] }}{% else %} · Branch/tag {{ run.ref }}{% endif %}{% else %} · No commit recorded{% endif %}</p>
   {% if run.repo_url %}<p><a href="{{ run.repo_url }}">Repository on GitHub ↗</a></p>{% else %}<p class="note">Local folder · source files are not hosted. File paths below are relative to this folder.</p>{% endif %}
 </div>
 {% if not run.finished %}
@@ -26,7 +26,7 @@
 <pre>{{ fix.diff or 'No change proposed' }}</pre>{% if fix.output %}<pre>{{ fix.output }}</pre>{% endif %}{% endfor %}</section>{% endif %}{% endif %}
 <section aria-labelledby="results-heading">
   <div class="section-heading"><h2 id="results-heading">Scan results</h2><p class="note">Failures shown first</p></div>
-  {% if run.stats.get('truncated', 0) %}<p class="note" role="status">Partial scan: checked the first {{ run.stats.selected }} of {{ run.stats.found }} snippets (limit {{ run.stats.max_snippets }}); {{ run.stats.truncated }} omitted. Percentages cover only the selected snippets. Use the CLI with --max-snippets 0 for an unlimited scan.</p>{% endif %}
+  {% if run.stats.get('truncated', 0) %}<p class="note" role="status">Partial scan: selected the first {{ run.stats.selected }} snippets ({{ run.stats.truncated }} omitted). {{ run.stats.found }} found; limit {{ run.stats.max_snippets }}. Percentages cover only the selected snippets. Use the CLI with --max-snippets 0 for an unlimited scan.</p>{% endif %}
   <div class="summary-grid">
     <div><strong {% if run.broken %}class="error"{% endif %}>{% if run.runnable %}{{ '%.1f'|format(run.percent) }}%{% else %}Not evaluated{% endif %}</strong><span>broken share</span></div>
     <div><strong>{{ run.broken }} / {{ run.runnable }}</strong><span>broken / checked snippets</span></div>
