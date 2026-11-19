@@ -115,6 +115,40 @@ def test_classifier(message, code, expected):
     assert classify(message, code) == expected
 
 
+@pytest.mark.parametrize('stderr,exit_code,code,expected', [
+    ("StripeAuthenticationError: Invalid API Key provided: sk_test_...\n  statusCode: 401", 0, '', 'needs_credentials'),
+    ('{ statusCode: 200 }', 0, '', 'pass'),
+    ("SyntaxError: The requested module 'https-proxy-agent' does not provide an export named 'default'", 1, '', 'runtime_error'),
+    ('OpenAIError: Missing credentials. Please pass an `apiKey`', 1, '', 'needs_credentials'),
+    ("Error: Set OPENAI_MODEL to a model", 1, "const model = process.env['OPENAI_MODEL'];", 'needs_credentials'),
+    ("Error: Set OPENAI_MODEL to a model", 1, "const model = 'x';", 'runtime_error'),
+    ('ReferenceError: stripeClient is not defined', 1, 'stripeClient.customers.list();', 'needs_context'),
+    ('ReferenceError: document is not defined', 1, "document.querySelector('a');", 'needs_context'),
+    ('ReferenceError: client is not defined', 1, 'if (x) { const client = 1; }\nclient.go();', 'runtime_error'),
+    ('ReferenceError: Stripe is not defined', 1, "import { Stripe } from 'stripe';", 'runtime_error'),
+    ('ReferenceError: a is not defined', 1, 'const { a, b } = c;', 'runtime_error'),
+    ('ReferenceError: err is not defined', 1, 'try { x(); } catch (err) {}\nconsole.log(err);', 'runtime_error'),
+    ('ReferenceError: item is not defined', 1, 'list.forEach((item) => 1);\nitem.go();', 'runtime_error'),
+    ('ReferenceError: client is not defined', 1, '// const client = new Client();\nclient.request();', 'needs_context'),
+    ('ReferenceError: client is not defined', 1, '/* const client = new Client(); */\nclient.request();', 'needs_context'),
+    ('ReferenceError: client is not defined', 1, "const url = 'https://x'; const client = 1;\n{ }\nclient.go();", 'runtime_error'),
+    ('ReferenceError: client is not defined', 1, "log('const client = 1');\nclient.go();", 'needs_context'),
+])
+def test_javascript_verdicts(stderr, exit_code, code, expected):
+    assert classify(stderr, exit_code, code=code) == expected
+
+
+def test_needs_context_reason_and_leaderboard(tmp_path):
+    result = run(Snippet('js', 'a.md', 1, 'javascript', 'stripeClient.customers.list();'), 'local')
+    if shutil.which('node'):
+        assert result['status'] == 'needs_context'
+        assert '`stripeClient`' in result['reason']
+    store = Store(tmp_path / 'board.db')
+    rid = store.start('repo')
+    store.finish(rid, [{'id': 'a', 'status': 'needs_context', 'versions': {}}, {'id': 'b', 'status': 'runtime_error', 'versions': {}}], {})
+    assert store.leaderboard()[0]['runnable'] == 1 and store.leaderboard()[0]['percent'] == 100
+
+
 def test_timeout_install():
     assert classify('', -9, timed_out=True) == 'timeout'
     assert classify('', 1, install_failed=True) == 'missing_dependency'

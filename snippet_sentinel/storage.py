@@ -2,7 +2,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from .classifier import BROKEN
+from .classifier import BROKEN, INCONCLUSIVE
 
 
 def now():
@@ -73,7 +73,7 @@ class Store:
             run = self.get(row['id'])
             c = run['counts']
             broken = sum(c.get(s, 0) for s in BROKEN)
-            runnable = sum(c.values()) - c.get('skipped', 0) - c.get('needs_credentials', 0)
+            runnable = sum(c.values()) - sum(c.get(s, 0) for s in INCONCLUSIVE)
             run.update(broken=broken, runnable=runnable, percent=100 * broken / runnable if runnable else 0)
             board.append(run)
         return sorted(board, key=lambda r: r['percent'], reverse=True)

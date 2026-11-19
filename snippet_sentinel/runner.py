@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .classifier import classify
+from .classifier import classify, undefined_name
 from .dependencies import dependencies, javascript_mode, pinned
 
 
@@ -142,8 +142,11 @@ process.exit(r.status === null ? 1 : r.status);
                         pass
                 else:
                     lines.append(line)
-            result.update(status=classify(out, rc, expired, 'SENTINEL_INSTALL_FAILED' in out),
-                          stderr='\n'.join(lines)[-8000:], exit_code=rc)
+            status = classify(out, rc, expired, 'SENTINEL_INSTALL_FAILED' in out, snippet.code)
+            result.update(status=status, stderr='\n'.join(lines)[-8000:], exit_code=rc)
+            if status == 'needs_context':
+                result['reason'] = (f'Uses `{undefined_name(out, snippet.code)}` without defining it: '
+                                    'likely continues an earlier example or expects a browser page.')
         except OSError as exc:
             if runner == 'docker':
                 raise InfrastructureError(f'Docker unavailable: {exc}') from exc

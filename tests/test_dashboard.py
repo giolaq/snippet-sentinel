@@ -86,3 +86,17 @@ def test_local_sources_and_untrusted_text_are_not_links(tmp_path):
     assert 'Local file · open this path at line 42' in page
     assert 'View source on GitHub' not in page
     assert '/private/worker' not in page
+
+
+def test_context_needed_is_excluded_and_filterable(tmp_path):
+    db = tmp_path / 'runs.db'
+    store = Store(db)
+    rid = store.start('https://github.com/a/b')
+    store.finish(rid, [result('needs_context'), result('runtime_error')], {}, 'abc123')
+    client = TestClient(create_app(db))
+    page = client.get('/').text
+    assert '100.0%' in page and '1 of 1 checked' in page
+    assert '1 snippet<span' in page and 'Context: 1' in page
+    page = client.get(f'/runs/{rid}?status=needs_context').text
+    assert page.count('<article ') == 1
+    assert 'Context needed' in page and 'A fragment needs setup' in page

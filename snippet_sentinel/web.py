@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from .classifier import BROKEN
+from .classifier import BROKEN, INCONCLUSIVE
 from .scan import github_url, scan
 from .storage import Store
 
@@ -21,6 +21,7 @@ VERDICTS = {
     'timeout': ('Timed out', 'Setup or execution exceeded the time limit.'),
     'pass': ('Passed', 'The snippet completed without an error.'),
     'needs_credentials': ('Credentials needed', 'Likely requires a key or sign-in; detected heuristically, not counted as broken.'),
+    'needs_context': ('Context needed', 'A fragment needs setup from an earlier example; not counted as broken.'),
     'skipped': ('Skipped', 'Not executed, for example an opted-out or incomplete example.'),
 }
 templates.globals.update(verdicts=VERDICTS, broken_statuses=BROKEN)
@@ -49,13 +50,14 @@ def present_run(run):
         repo_url = ''
     counts = run['counts']
     broken = sum(counts.get(name, 0) for name in BROKEN)
-    checked = sum(counts.values()) - counts.get('skipped', 0) - counts.get('needs_credentials', 0)
+    excluded = sum(counts.get(name, 0) for name in INCONCLUSIVE)
+    checked = sum(counts.values()) - excluded
     run.update(repo_url=repo_url,
                repo_name=repo_url.removeprefix('https://github.com/') if repo_url else
                (run['repo'].replace('\\', '/').rstrip('/').rsplit('/', 1)[-1] or 'Local folder'),
                broken=broken, runnable=checked,
                percent=100 * broken / checked if checked else None,
-               excluded=counts.get('skipped', 0) + counts.get('needs_credentials', 0))
+               excluded=excluded)
     return run
 
 

@@ -7,7 +7,7 @@
 </div>
 <section aria-labelledby="leaderboard-heading">
   <div class="section-heading"><h2 id="leaderboard-heading">Repository leaderboard</h2><p class="note">Latest scan per repository</p></div>
-  <p class="note">Highest broken share first. Broken = syntax, dependency, runtime, or timeout errors. Skipped snippets and those needing credentials are excluded.</p>
+  <p class="note">Highest broken share first. Broken = syntax, dependency, runtime, or timeout errors. Skipped snippets and those needing credentials or earlier example context are excluded.</p>
   {% if runs %}
   <table class="leaderboard">
     <thead><tr><th scope="col">Repository</th><th scope="col">Broken share</th><th scope="col">Not evaluated</th><th scope="col">Latest scan</th></tr></thead>
@@ -15,7 +15,7 @@
       <tr>
         <td><span class="rank">{{ loop.index }}.</span><a class="repo-name" href="/runs/{{ run.id }}">{{ run.repo_name }}</a><span class="cell-detail">{% if run.repo_url %}GitHub repository{% else %}Local folder · source not hosted{% endif %}</span></td>
         <td data-label="Broken share">{% if not run.finished or run.error %}<span class="muted">Not available</span>{% elif run.runnable %}<strong {% if run.broken %}class="error"{% endif %}>{{ '%.1f'|format(run.percent) }}%</strong><span class="cell-detail">{{ run.broken }} of {{ run.runnable }} checked</span>{% else %}<strong>Not evaluated</strong><span class="cell-detail">No eligible snippets</span>{% endif %}</td>
-        <td data-label="Not evaluated">{{ run.excluded }} snippet{{ '' if run.excluded == 1 else 's' }}<span class="cell-detail">Credentials: {{ run.counts.get('needs_credentials', 0) }} · Skipped: {{ run.counts.get('skipped', 0) }}</span></td>
+        <td data-label="Not evaluated">{{ run.excluded }} snippet{{ '' if run.excluded == 1 else 's' }}<span class="cell-detail">Credentials: {{ run.counts.get('needs_credentials', 0) }} · Skipped: {{ run.counts.get('skipped', 0) }} · Context: {{ run.counts.get('needs_context', 0) }}</span></td>
         <td data-label="Latest scan">{% if not run.finished %}<span class="badge">Scanning…</span>{% elif run.error %}<span class="badge broken">Scan failed</span>{% else %}<time datetime="{{ run.started }}">{{ run.started|readable_date }}</time>{% endif %}<a class="cell-detail" href="/runs/{{ run.id }}">View {% if run.error %}scan error{% else %}results{% endif %} →</a></td>
       </tr>
     {% endfor %}</tbody>
