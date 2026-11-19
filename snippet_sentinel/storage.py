@@ -9,6 +9,10 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# A broken share over fewer checked snippets is too noisy to rank publicly.
+MIN_EVALUATED = 10
+
+
 class Store:
     def __init__(self, path='sentinel.db'):
         self.path = str(path)
@@ -128,6 +132,7 @@ class Store:
             broken = sum(c.get(s, 0) for s in BROKEN)
             runnable = sum(c.values()) - sum(c.get(s, 0) for s in INCONCLUSIVE)
             percent = 100 * broken / runnable if run['finished'] and not run['error'] and runnable else None
-            run.update(broken=broken, runnable=runnable, percent=percent)
+            run.update(broken=broken, runnable=runnable, percent=percent,
+                       rankable=percent is not None and runnable >= MIN_EVALUATED)
             board.append(run)
-        return sorted(board, key=lambda r: r['percent'] if r['percent'] is not None else -1, reverse=True)
+        return sorted(board, key=lambda r: (r['rankable'], r['percent'] if r['percent'] is not None else -1), reverse=True)
