@@ -33,7 +33,7 @@ def test_leaderboard_scores_exclusions_and_local_privacy(tmp_path):
     assert '/private/worker' not in page
     assert 'demo-docs' in page and 'Local folder' in page
     assert '50.0%' in page and '1 of 2 checked' in page
-    assert '1 need credentials · 1 skipped' in page
+    assert 'Credentials: 1 · Skipped: 1' in page
     assert page.index('<table') < page.index('<summary>Scan a GitHub')
     assert re.search(r'<time datetime="[^"]+">\w+ \d+, \d+ · \d+:\d+ UTC</time>', page)
 
