@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block head %}{% if not run.finished and not static %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block content %}<h1>Run #{{ run.id }}</h1><p>{{ run.repo }}<br><span class="muted">{{ run.ref or 'No commit recorded' }} · {{ run.started }}</span></p>
+{% if not run.finished %}<section><h2>Scan in progress…</h2><p>Cloning, extracting and running snippets. This page refreshes every five seconds.</p></section>{% endif %}
+{% if run.error %}<section class="error">{{ run.error }}</section>{% endif %}
+<section><h2>Results</h2><div class="meta">{% for name,count in run.counts.items() %}<span class="badge">{{ name }} · {{ count }}</span>{% endfor %}<span class="badge">Unsupported TypeScript · {{ run.stats.get('unsupported',0) }}</span></div>
+{% if not static %}<form method="get"><label>Filter status <select name="status"><option value="">All statuses</option>{% for name in run.counts %}<option {% if status==name %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label> <button>Filter</button></form>{% endif %}</section>
+{% for s in run.results if not status or s.status == status %}<article><div class="meta"><span class="badge">{{ s.status }}</span><span class="badge">{{ s.lang }}</span><span class="badge">{{ s.runner }}{% if s.runner == 'local' %} · UNSANDBOXED{% endif %}</span></div>
+<h2>{% if run.repo.startswith('https://github.com/') and run.ref %}<a href="{{ run.repo }}/blob/{{ run.ref }}/{{ s.file|urlpath }}{% if s.file.lower().endswith(('.md', '.mdx', '.markdown')) %}?plain=1{% endif %}#L{{ s.line }}">{{ s.file }}:{{ s.line }}</a>{% else %}{{ s.file }}:{{ s.line }}{% endif %}</h2>
+{% if s.reason %}<p>{{ s.reason }}</p>{% endif %}<pre><code>{{ s.code }}</code></pre>
+{% if s.stderr %}<h3>Output / error tail</h3><pre>{{ s.stderr }}</pre>{% endif %}<p class="muted">Exit code: {{ s.exit_code }} · Installed: {{ s.versions or 'No external packages' }}</p>
+{% if s.broken_since %}<p class="error">Broken since run #{{ s.broken_since.run_id }} · {{ s.broken_since.started }}</p><p>Versions at first failure: {{ s.broken_since.versions or 'No external packages' }}</p>{% endif %}</article>{% else %}<p class="empty">No matching snippets.</p>{% endfor %}{% endblock %}

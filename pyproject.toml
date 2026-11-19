@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snippet-sentinel"
+version = "0.1.0"
+description = "Find broken code samples before your readers do"
+requires-python = ">=3.10"
+dependencies = ["fastapi", "uvicorn", "jinja2"]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+
+[project.scripts]
+snippet-sentinel = "snippet_sentinel.cli:main"
+
+[tool.setuptools.package-data]
+snippet_sentinel = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["docker: requires Docker"]
