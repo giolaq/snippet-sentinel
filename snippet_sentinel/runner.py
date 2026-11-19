@@ -168,21 +168,22 @@ if (installs.length) {
 const p = spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'});
 const deps = JSON.parse(p.stdout || '{}').dependencies || {};
 console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries(packages.filter(x=>deps[x]).map(x=>[x,deps[x].version]))));
+const exec = (file, options) => spawnSync(transpile ? 'node_modules/.bin/tsx' : 'node', [file], options);
 let r;
-if (transpile) {
- r = spawnSync('node_modules/.bin/tsx', [filename], {stdio: 'inherit'});
-} else if (filename.endsWith('.cjs')) {
- r = spawnSync('node', [filename], {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
- if (r.status !== 0 && /SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)/.test(r.stderr || '')) {
-  const code = fs.readFileSync(filename, 'utf8');
-  const wrapped = 'snippet-async.cjs';
-  fs.writeFileSync(wrapped, '(async () => {\\n' + code + '\\n})().catch(error => { console.error(error); process.exitCode = 1; });\\n');
-  r = spawnSync('node', [wrapped], {stdio: 'inherit'});
+if (esm) {
+ r = exec(filename, {stdio: 'inherit'});
+} else {
+ r = exec(filename, {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
+ if (r.status !== 0 && /SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)|Top-level await is currently not supported with the "cjs" output format/.test(r.stderr || '')) {
+  const lines = fs.readFileSync(filename, 'utf8').split('\\n');
+  const hoisted = lines.filter(line => /^\\s*import\\b/.test(line));
+  const body = lines.filter(line => !/^\\s*import\\b/.test(line));
+  const wrapped = 'snippet-async' + filename.slice(filename.lastIndexOf('.'));
+  fs.writeFileSync(wrapped, hoisted.join('\\n') + '\\n(async () => {\\n' + body.join('\\n') + '\\n})().catch(error => { console.error(error); process.exitCode = 1; });\\n');
+  r = exec(wrapped, {stdio: 'inherit'});
  } else if (r.stderr) {
   process.stderr.write(r.stderr);
  }
-} else {
- r = spawnSync('node', [filename], {stdio: 'inherit'});
 }
 if (r.error) console.error(r.error);
 process.exit(r.status === null ? 1 : r.status);
