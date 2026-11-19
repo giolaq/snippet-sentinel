@@ -28,7 +28,10 @@ def documented_failure(snippet, status, output):
     if name == snippet.expected_error:
         return f'demonstrates {name} as documented'
     if name == 'NameError':
-        missing = re.fullmatch(r"name '(\w+)' is not defined(?:\. Did you mean: .+)?", message)
+        missing = re.fullmatch(
+            r"name '(\w+)' is not defined(?:\. (?:Did you mean: .+|Did you forget to import '\1'\?))?",
+            message,
+        )
         if missing and missing[1] in snippet.context_names:
             return f'requires earlier setup: {missing[1]}'
     if name == 'SyntaxError' and message == "'await' outside function" and snippet.context_names:

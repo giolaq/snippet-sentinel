@@ -10,7 +10,7 @@ from snippet_sentinel.classifier import classify
 from snippet_sentinel.dependencies import dependencies, is_esm, pinned
 from snippet_sentinel.extractor import extract
 from snippet_sentinel.extractor import Snippet
-from snippet_sentinel.runner import InfrastructureError, run
+from snippet_sentinel.runner import InfrastructureError, documented_failure, run
 from snippet_sentinel.scan import github_url, scan
 from snippet_sentinel.storage import Store
 from snippet_sentinel.web import create_app, render_run
@@ -332,6 +332,14 @@ def test_run_documentation_fragments(tmp_path, body, output, expected):
     result = run(snippet, runner='local')
     assert result['status'] == expected, result
     assert bool(result['reason']) == (expected == 'skipped')
+
+
+def test_name_error_with_import_suggestion():
+    output = "NameError: name 'json' is not defined. Did you forget to import 'json'?"
+    snippet = Snippet('x', 'a.md', 1, 'python', 'json.dumps(1)', context_names=('json',))
+    assert documented_failure(snippet, 'runtime_error', output) == 'requires earlier setup: json'
+    snippet.context_names = ('other',)
+    assert documented_failure(snippet, 'runtime_error', output) == ''
 
 
 def test_leaderboard_places_unassessed_runs_after_measured_runs(tmp_path):
