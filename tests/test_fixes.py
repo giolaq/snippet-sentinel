@@ -1,4 +1,6 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import MagicMock
 
 import pytest
@@ -115,6 +117,26 @@ def test_scan_settings_used_for_verification(tmp_path, monkeypatch):
     monkeypatch.setattr('snippet_sentinel.fixer.runner.run', verification)
     assert fix_run(run['id'], db, [Rules()])['results'][0]['verified']
     assert verification.call_args.kwargs == {'timeout': 17, 'pins': ['requests==2.32.3']}
+
+
+def test_concurrent_fix_jobs_only_verify_once(tmp_path, monkeypatch):
+    db = tmp_path / 's.db'
+    store, rid = make_run(db)
+    barrier = Barrier(2)
+    ensure = Store.ensure_fix_job
+    def ensure_together(self, run_id):
+        created = ensure(self, run_id)
+        barrier.wait(timeout=10)
+        return created
+    monkeypatch.setattr(Store, 'ensure_fix_job', ensure_together)
+    verification = MagicMock(return_value={'status': 'pass', 'stderr': ''})
+    monkeypatch.setattr('snippet_sentinel.fixer.runner.run', verification)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = list(pool.map(lambda _: fix_run(rid, db, [Rules()]), range(2)))
+    assert all(job['status'] in {'running', 'done'} for job in jobs)
+    assert verification.call_count == 1
+    job = store.fix_job(rid)
+    assert job['status'] == 'done' and len(job['results']) == 1
 
 
 @pytest.mark.parametrize('fork', [False, True])

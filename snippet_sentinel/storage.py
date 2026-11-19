@@ -41,6 +41,10 @@ class Store:
         with self.connect() as db:
             db.execute('UPDATE fix_jobs SET ' + ','.join(k + '=?' for k in fields) + ' WHERE run_id=?', (*fields.values(), run_id))
 
+    def claim_fix_job(self, run_id):
+        with self.connect() as db:
+            return db.execute("UPDATE fix_jobs SET status='running',error='' WHERE run_id=? AND status='pending'", (run_id,)).rowcount == 1
+
     def save_fix(self, run_id, fix):
         with self.connect() as db:
             db.execute('INSERT INTO fixes(run_id,data) VALUES(?,?)', (run_id, json.dumps(fix)))

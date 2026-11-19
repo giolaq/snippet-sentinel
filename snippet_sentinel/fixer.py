@@ -76,11 +76,9 @@ def fix_run(run_id, db='sentinel.db', proposers=None):
     run = store.get(run_id)
     if not run or not run['finished'] or run['error']:
         raise ValueError('A successfully completed scan is required')
-    if not store.ensure_fix_job(run_id):
-        job = store.fix_job(run_id)
-        if job['status'] != 'pending':
-            return job
-    store.update_fix_job(run_id, status='running', error='')
+    store.ensure_fix_job(run_id)
+    if not store.claim_fix_job(run_id):
+        return store.fix_job(run_id)
     try:
         for result in run['results']:
             if result['status'] not in BROKEN:
