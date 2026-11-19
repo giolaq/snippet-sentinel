@@ -95,7 +95,7 @@ def fix_run(run_id, db='sentinel.db', proposers=None):
                         continue
                     fix.update(proposed=candidate, proposer=proposer.name)
                     snippet = Snippet(result['id'], result['file'], result['line'], result['lang'], candidate)
-                    verification = runner.run(snippet, result['runner'])
+                    verification = runner.run(snippet, result['runner'], timeout=run['timeout'], pins=run['pins'])
                     fix.update(verified=verification['status'] == 'pass', output=verification.get('stderr', '')[-2000:])
                     if fix['verified']:
                         break

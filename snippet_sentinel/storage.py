@@ -22,7 +22,14 @@ class Store:
                 CREATE TABLE IF NOT EXISTS fix_jobs (
                 run_id INTEGER PRIMARY KEY REFERENCES runs(id), status TEXT, pr_url TEXT DEFAULT '', error TEXT DEFAULT '');
                 CREATE TABLE IF NOT EXISTS fixes (
-                id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES runs(id), data TEXT);''')
+                id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES runs(id), data TEXT);
+                CREATE TABLE IF NOT EXISTS run_settings (
+                run_id INTEGER PRIMARY KEY REFERENCES runs(id), pins TEXT, timeout INTEGER);''')
+
+    def set_run_settings(self, run_id, pins, timeout):
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO run_settings(run_id,pins,timeout) VALUES(?,?,?)',
+                       (run_id, json.dumps(list(pins)), timeout))
 
     def ensure_fix_job(self, run_id):
         with self.connect() as db:
@@ -75,6 +82,9 @@ class Store:
             if not row:
                 return None
             run = dict(row)
+            settings = db.execute('SELECT pins,timeout FROM run_settings WHERE run_id=?', (run_id,)).fetchone()
+            run['pins'] = json.loads(settings['pins']) if settings else []
+            run['timeout'] = settings['timeout'] if settings else 60
             run['counts'] = json.loads(run['counts'] or '{}')
             run['stats'] = json.loads(run['stats'] or '{}')
             results = [json.loads(r['data']) for r in db.execute('SELECT data FROM results WHERE run_id=? ORDER BY id', (run_id,))]

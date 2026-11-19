@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from snippet_sentinel.fixer import LLM, Rules, fix_run
 from snippet_sentinel.github import GitHub, open_fix_pr, replace_fence
 from snippet_sentinel.storage import Store
+from snippet_sentinel.scan import scan
 from snippet_sentinel.web import create_app
 
 
@@ -94,9 +95,26 @@ def test_verification(tmp_path, monkeypatch, outcome):
         assert fix['original'] == 'print(os.name)'
         assert fix['output'] == ('sandbox unavailable' if outcome == 'exception' else 'tail')
         assert fake.call_args.args[1] == 'docker'
+        assert fake.call_args.kwargs == {'timeout': 60, 'pins': []}
     assert fix_run(rid, db, [Rules()]) == job
     with pytest.raises(ValueError):
         fix_run(999, db)
+
+
+def test_scan_settings_used_for_verification(tmp_path, monkeypatch):
+    db = tmp_path / 's.db'
+    (tmp_path / 'a.md').write_text('```py\nprint(os.name)\n```\n')
+    def scan_runner(snippet, backend, timeout, pins):
+        assert (backend, timeout, pins) == ('docker', 17, ['requests==2.32.3'])
+        return {**snippet.dict(), 'runner': backend, 'versions': {}, 'status': 'runtime_error',
+                'stderr': "NameError: name 'os' is not defined"}
+    monkeypatch.setattr('snippet_sentinel.scan.run', scan_runner)
+    run = scan(str(tmp_path), db=db, pins=['requests==2.32.3'], timeout=17)
+    assert run['pins'] == ['requests==2.32.3'] and run['timeout'] == 17
+    verification = MagicMock(return_value={'status': 'pass', 'stderr': ''})
+    monkeypatch.setattr('snippet_sentinel.fixer.runner.run', verification)
+    assert fix_run(run['id'], db, [Rules()])['results'][0]['verified']
+    assert verification.call_args.kwargs == {'timeout': 17, 'pins': ['requests==2.32.3']}
 
 
 @pytest.mark.parametrize('fork', [False, True])
@@ -142,7 +160,7 @@ def test_api_and_web(tmp_path, monkeypatch):
     monkeypatch.delenv('GH_TOKEN', raising=False)
     db = tmp_path / 's.db'
     store, rid = make_run(db)
-    monkeypatch.setattr('snippet_sentinel.fixer.runner.run', lambda *a: {'status': 'pass', 'stderr': ''})
+    monkeypatch.setattr('snippet_sentinel.fixer.runner.run', lambda *a, **kw: {'status': 'pass', 'stderr': ''})
     web = TestClient(create_app(db))
     assert 'Propose fixes' in web.get(f'/runs/{rid}').text
     page = web.post(f'/runs/{rid}/fix').text
