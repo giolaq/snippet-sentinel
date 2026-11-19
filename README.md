@@ -15,7 +15,7 @@ snippet-sentinel scan https://github.com/psf/requests --jobs 4
 snippet-sentinel serve --port 8000
 ```
 
-Open http://localhost:8000. The leaderboard ranks latest runs by broken percentage, excluding skipped and credential-blocked samples. Run pages show source links pinned to commits, code, output tails, installed versions, and the first run in each consecutive failing streak. Submit a public GitHub repository on the dashboard to scan in the background; the progress page refreshes automatically.
+Open http://localhost:8000. The leaderboard ranks latest runs by broken percentage, excluding skipped, credential-blocked and needs-context samples. Run pages show source links pinned to commits, code, output tails, installed versions, and the first run in each consecutive failing streak. Submit a public GitHub repository on the dashboard to scan in the background; the progress page refreshes automatically.
 
 ## CLI
 
@@ -37,7 +37,7 @@ Scans `.md`, `.mdx` and `.markdown`, excluding `.git`, `node_modules` and `vendo
 
 Opt out with `skip`, `norun` or `no-run` in the fence info string, or `<!-- sentinel:skip -->` on the line immediately above it. REPL transcripts (`>>>`) and standalone `...` / `// ...` placeholders are skipped. Snippets are identified by a hash of relative path and code, so line movement preserves history; edits or path moves start new history.
 
-Statuses: `pass`, `syntax_error`, `missing_dependency`, `needs_credentials`, `runtime_error`, `timeout`, `skipped`. Installation failures count as missing dependencies; credential classification is heuristic, not a guarantee. Only syntax, dependency, runtime and timeout failures count as broken. Empty/credential-only repositories show 0% with a zero evaluable denominator. Broken-since streaks reset on pass, skip, credential status or absence in a completed scan.
+Statuses: `pass`, `syntax_error`, `missing_dependency`, `needs_credentials`, `needs_context`, `runtime_error`, `timeout`, `skipped`. Installation failures count as missing dependencies; credential classification is heuristic, not a guarantee. A sample that exits 0 after printing a caught authentication failure (for example a Stripe 401) is `needs_credentials`, not `pass`. A JavaScript `ReferenceError` for a name the snippet never declares (`stripeClient` set up in an earlier block, `document` in browser code) is `needs_context`. A missing named export (`does not provide an export named`) is a `runtime_error`, not a syntax error. Only syntax, dependency, runtime and timeout failures count as broken. Empty/credential-only repositories show 0% with a zero evaluable denominator. Broken-since streaks reset on pass, skip, credential or context status, or absence in a completed scan.
 
 Dependencies are inferred from Python AST imports (stdlib excluded, common import/package aliases mapped) and JS import/require specifiers (Node builtins excluded, scoped packages/subpaths handled). Versions are recorded after installation and before execution. Output combines stdout/stderr and keeps the last 8 KB. ESM syntax/top-level await selects `.mjs`; other JS uses `.cjs`.
 
