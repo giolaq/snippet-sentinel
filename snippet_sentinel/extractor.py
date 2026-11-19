@@ -77,7 +77,7 @@ def expected_error(lines, end):
 def javascript_fragment(code):
     """Docs blocks that are illustrations rather than programs; running them only reports noise."""
     bare = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/''', '""', code, flags=re.S)
-    if re.search(r'^\s*//\s*before\b', code, re.I | re.M) and re.search(r'^\s*//\s*after\b', code, re.I | re.M):
+    if re.search(r'^\s*//[^\w\n]*before\b', code, re.I | re.M) and re.search(r'^\s*//[^\w\n]*after\b', code, re.I | re.M):
         return 'before/after comparison'
     if re.search(r'''\bfrom\s*['"](?:npm|jsr):|\bimport\s*\(\s*['"](?:npm|jsr):''', code):
         return 'Deno-only import'

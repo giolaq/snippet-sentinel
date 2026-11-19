@@ -33,7 +33,7 @@ def undefined_name(stderr, code):
     code = re.sub(r'''('|"|`)(?:\\.|(?!\1)[^\\])*\1|/\*.*?\*/|//[^\n]*''',
                   lambda m: '""' if m.group(1) else '', code, flags=re.S)
     declared = (rf'\b(?:const|let|var|class|function\s*\*?)\s+{name}\b',
-                rf'\b(?:const|let|var)\s*[{{\[][^=;]*\b{name}\b',
+                rf'\b(?:const|let|var)\s*[{{\[][^=;\]}}]*\b{name}\b',
                 rf'\bimport\b[^;]*?\b{name}\b[^;]*?\bfrom\b',
                 rf'\bcatch\s*\(\s*{name}\b',
                 rf'\bfunction\b[^(]*\([^)]*\b{name}\b[^)]*\)',

@@ -176,6 +176,7 @@ def test_classifier(message, code, expected):
     ('ReferenceError: client is not defined', 1, '/* const client = new Client(); */\nclient.request();', 'needs_context'),
     ('ReferenceError: client is not defined', 1, "const url = 'https://x'; const client = 1;\n{ }\nclient.go();", 'runtime_error'),
     ('ReferenceError: client is not defined', 1, "log('const client = 1');\nclient.go();", 'needs_context'),
+    ('ReferenceError: run is not defined', 1, "for await (const [content, snapshot] of run.events('x')) {}", 'needs_context'),
     ('ReferenceError: require is not defined in ES module scope, you can use import instead', 1, "require('x');", 'runtime_error'),
     ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/components/EmailTemplate' imported from /work/snippet.jsx", 1, '', 'needs_context'),
     ("Error [ERR_MODULE_NOT_FOUND]: Cannot find module './util.js' imported from /tmp/x/snippet.mjs", 1, '', 'needs_context'),
@@ -510,6 +511,7 @@ def test_docker_versions():
 @pytest.mark.parametrize('code,expected', [
     ("// Before\nconst c = Stripe('k');\n\n// After\nconst c = new Stripe('k');", 'before/after comparison'),
     ("import Stripe from 'npm:stripe';", 'Deno-only import'),
+    ("// \u274c Before (v22.0.0)\nconst t = {};\n\n// \u2705 After (v22.1.2+)\nconst t = {};", 'before/after comparison'),
     (".on('event', (event: AssistantStreamEvent) => ...)", 'method-chain fragment'),
     ("await .finalMessages() : Promise<Message[]>", 'method-chain fragment'),
     ("await resend.emails.send({ ... });", 'placeholder ellipsis'),
