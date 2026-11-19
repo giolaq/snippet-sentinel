@@ -49,6 +49,8 @@ Statuses: `pass`, `syntax_error`, `missing_dependency`, `needs_credentials`, `ne
 
 Dependencies are inferred from Python AST imports (stdlib excluded, common import/package aliases mapped) and JS import/require specifiers (Node builtins excluded, scoped packages/subpaths handled). Missing optional peers imported by an SDK inside `node_modules` are installed and the snippet retried, up to three unique peers. Offline workers request the peer and exit; the host checks for surviving snippet processes before reconnecting for a separate install, then disconnects before retrying. Workers never run npm offline. Network-enabled runs install peers inline. The original timeout and shared output budget cover all attempts and installs; peer versions are recorded too. JS failures caused by `/path/to/…` files or `example.com`/`.org`/`.net` placeholder hosts are skipped before DNS diagnostics. Page-relative fetch URLs and browser-only APIs are `needs_context`. Output combines stdout/stderr and keeps the last 8 KB. ESM syntax/top-level await selects `.mjs`; other JS uses `.cjs`.
 
+A Python `NameError` for a name exported by an installed package is reported with a missing-import reason. Hub-style authentication failures remain `needs_credentials`; `ImportError: … pip install …` is `missing_dependency`. Failures named in Python comments or transcript output are skipped as documented.
+
 ## Deployment and development
 
 ```sh
