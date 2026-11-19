@@ -342,6 +342,53 @@ def test_name_error_with_import_suggestion():
     assert documented_failure(snippet, 'runtime_error', output) == ''
 
 
+@pytest.mark.parametrize('markdown,expected,reason', [
+    ('~~~py\njson.dumps(value)\n~~~\n~~~py\nimport json\n~~~', 'skipped', 'requires example setup: json'),
+    ('Compare `json.dumps` with the alternative.\n~~~py\njson.dumps(value)\n~~~',
+     'skipped', 'requires example setup: json'),
+    ('Show the equivalent call.\n~~~py\njson.dumps(value)\n~~~\n\n## API\nUse `json.dumps` to serialize.',
+     'skipped', 'requires example setup: json'),
+    ('~~~py\nimport json\n~~~\n\nUse `io.BytesIO` for a file-like object.\n'
+     '~~~py\nimport io\nstream = io.BytesIO(contents)\njson.load(stream)\n~~~',
+     'skipped', 'requires example setup: contents'),
+    ('~~~py\nopen("/path/to/config.json")\n~~~', 'skipped', 'placeholder path'),
+    ('~~~py\nopen("/missing/config.json")\n~~~', 'runtime_error', ''),
+    ('~~~py\nprint("/path/to/config.json"); open("/missing/config.json")\n~~~', 'runtime_error', ''),
+    ('Compare `json.dumps`.\n~~~py\njsno.dumps(value)\n~~~', 'runtime_error', ''),
+    ('Compare `json.dumps`.\n~~~py\njson.removed_api(value)\n~~~', 'runtime_error', ''),
+    ('Compare `json.dumps`.\n~~~py\njson.dumps(value)\nimport json\n~~~', 'runtime_error', ''),
+    ('Compare `json.dumps`.\n~~~py\nvalue = 1\nprint(json.dumps(value))\n~~~\n~~~py\nimport json\n~~~',
+     'runtime_error', ''),
+    ('Compare `json.dumps`.\n~~~py\nimport json\njson.removed_api(value)\n~~~', 'runtime_error', ''),
+    ('Compare `json.dumps`.\n~~~py\nfrom json import removed_api\n~~~', 'runtime_error', ''),
+])
+def test_illustrative_python_verdicts(tmp_path, markdown, expected, reason):
+    (tmp_path / 'a.md').write_text(markdown)
+    snippets, _ = extract(tmp_path)
+    snippet = next(s for s in snippets if s.code != 'import json')
+    result = run(snippet, runner='local')
+    assert result['status'] == expected, result
+    assert reason in result['reason'] if reason else not result['reason']
+
+
+@pytest.mark.parametrize('body,unavailable,expected', [
+    ('import sync_helper as helper\nhelper.get_token(...)', 'sync_helper', 'skipped'),
+    ('import sync_helper as helper\nhelper.get_token("production")', 'sync_helper', 'missing_dependency'),
+    ('import sync_helper as helper\nhelper.get_token(...)', 'sync_helper==99.0', 'missing_dependency'),
+    ('import sync_helper as helper\nimport unrelated\nhelper.get_token(...)', 'unrelated', 'missing_dependency'),
+])
+def test_run_illustrative_dependency(monkeypatch, body, unavailable, expected):
+    def command(args, *_):
+        if 'venv' in args:
+            return '', 0, False
+        return f'SENTINEL_INSTALL_FAILED\nERROR: No matching distribution found for {unavailable}\n', 1, False
+
+    monkeypatch.setattr('snippet_sentinel.runner.command', command)
+    result = run(Snippet('x', 'a.md', 1, 'python', body), runner='local')
+    assert result['status'] == expected, result
+    assert bool(result['reason']) == (expected == 'skipped')
+
+
 def test_run_documented_javascript_reference_error(tmp_path):
     if not shutil.which('node') or not shutil.which('npm'):
         pytest.skip('Local Node and npm required')

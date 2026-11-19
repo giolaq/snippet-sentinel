@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from .classifier import classify, error_summary, final_error, undefined_name
-from .dependencies import dependencies, javascript_mode, pinned
+from .dependencies import dependencies, javascript_mode, pinned, python_package
 
 
 class InfrastructureError(RuntimeError):
@@ -27,6 +28,7 @@ def documented_failure(snippet, status, output):
     name, message = error['name'], error['message'] or ''
     if name == snippet.expected_error:
         return f'demonstrates {name} as documented'
+    frames = re.findall(r'^  File "([^"\n]+)", line (\d+), in ', output[:error.start()], re.M)
     if name == 'NameError':
         missing = re.fullmatch(
             r"name '(\w+)' is not defined(?:\. (?:Did you mean: .+|Did you forget to import '\1'\?))?",
@@ -34,8 +36,38 @@ def documented_failure(snippet, status, output):
         )
         if missing and missing[1] in snippet.context_names:
             return f'requires earlier setup: {missing[1]}'
+        if (missing and 'Did you mean:' not in message and missing[1] in snippet.illustrative_names
+                and frames and frames[-1][0].endswith('/snippet.py')):
+            return f'requires example setup: {missing[1]}'
     if name == 'SyntaxError' and message == "'await' outside function" and snippet.context_names:
         return 'async fragment requiring earlier setup: ' + ', '.join(snippet.context_names)
+    if name == 'FileNotFoundError' and snippet.lang == 'python':
+        lines = [line for file, line in frames if file.endswith('/snippet.py')]
+        if lines:
+            line = int(lines[-1])
+            for node in ast.walk(ast.parse(snippet.code)):
+                if (isinstance(node, ast.Constant) and node.lineno == line and isinstance(node.value, str)
+                        and node.value.startswith('/path/to/') and (': ' not in message or node.value in message)):
+                    return f'requires replacing the placeholder path: {node.value}'
+    return ''
+
+
+def illustrative_dependency(snippet, output):
+    if snippet.lang != 'python':
+        return ''
+    unavailable = {re.sub(r'[-_.]+', '-', name.lower()) for name in re.findall(
+        r'^ERROR: No matching distribution found for ([\w.-]+)$', output, re.M)}
+    if not unavailable:
+        return ''
+    tree = ast.parse(snippet.code)
+    imported = {alias.asname or alias.name.split('.')[0]: alias.name
+                for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
+                if re.sub(r'[-_.]+', '-', python_package(alias.name).lower()) in unavailable}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+            alias = node.func.value.id
+            if alias in imported and any(isinstance(arg, ast.Constant) and arg.value is Ellipsis for arg in node.args):
+                return f'illustrative dependency with placeholder arguments: {imported[alias]}'
     return ''
 
 
@@ -167,7 +199,10 @@ process.exit(r.status === null ? 1 : r.status);
             install_failed = 'SENTINEL_INSTALL_FAILED' in lines
             output = '\n'.join(lines)
             status = classify(output, rc, expired, install_failed, snippet.code)
-            reason = '' if install_failed else documented_failure(snippet, status, output)
+            if install_failed:
+                reason = illustrative_dependency(snippet, output) if status == 'missing_dependency' else ''
+            else:
+                reason = documented_failure(snippet, status, output)
             if reason:
                 status = 'skipped'
             elif status == 'needs_context':
