@@ -188,6 +188,16 @@ def test_invalid_scan_form_retains_value(tmp_path, url):
     assert Store(db).leaderboard() == []
 
 
+@pytest.mark.parametrize('filename', ['docs/sample.md', 'sample.mdx', 'README.MD', 'guide.markdown'])
+@pytest.mark.parametrize('static', [False, True])
+def test_github_markdown_source_links(filename, static):
+    snippet = {**Snippet('x', filename, 42, 'python', '1').dict(),
+               'status': 'pass', 'runner': 'docker', 'versions': {}, 'stderr': '', 'exit_code': 0}
+    page = render_run({'id': 1, 'repo': 'https://github.com/a/b', 'ref': 'abc123',
+                       'finished': True, 'started': '', 'counts': {}, 'stats': {}, 'results': [snippet]}, static=static)
+    assert f'https://github.com/a/b/blob/abc123/{filename}?plain=1#L42' in page
+
+
 def test_indented_fence(tmp_path):
     (tmp_path / 'a.md').write_text('  ```python\n  print(1)\n  ```\n')
     assert extract(tmp_path)[0][0].code == 'print(1)'
