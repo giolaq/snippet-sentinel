@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .classifier import BROKEN, classify, error_summary, final_error, context_reason
 from .dependencies import TSX, dependencies, javascript_mode, pinned, python_package, script_name
+from .network_guard import MARKER
 
 QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
 ERROR_PATHS = re.compile(rf'({QUOTED_PATH})(?: -> ({QUOTED_PATH}))?')
@@ -367,6 +368,8 @@ def command(args, cwd, timeout, env=None, stdin=None):
             process.wait()
             process.stdout.close()
     tail = output[-16000:].decode(errors='replace')
+    if MARKER.encode() in output and MARKER not in tail:
+        tail = MARKER + '\n' + tail
     if exceeded:
         tail += '\nSENTINEL_OUTPUT_LIMIT: output limit exceeded (2 MiB)'
     return tail, process.returncode, timed_out
@@ -388,6 +391,10 @@ def run(snippet, runner='docker', timeout=60, pins=(), allow_network=False):
     with tempfile.TemporaryDirectory(prefix='sentinel-') as directory:
         path = Path(directory)
         path.joinpath(filename).write_text(code)
+        if runner == 'docker' and not allow_network:
+            path.joinpath('network_guard.py').write_text(Path(__file__).with_name('network_guard.py').read_text())
+            path.joinpath('network_guard.cjs').write_text(Path(__file__).with_name('network_guard.cjs').read_text())
+            path.joinpath('sitecustomize.py').write_text("import os\nif os.environ.get('SENTINEL_NETWORK_DISABLED') == '1':\n from network_guard import install\n install()\n")
         # A tiny worker keeps package discovery and execution identical across backends.
         worker = '''import json, subprocess, sys
 packages, specs, python, filename = json.loads(sys.argv[1])[:4]
@@ -464,7 +471,7 @@ process.exit(r.status === null ? 1 : r.status);
                     '--label', f'snippet-sentinel.owner-container={owner_container()}',
                     '--read-only', '--tmpfs', '/work:rw,exec,nosuid,size=128m',
                     '--tmpfs', '/tmp:rw,noexec,nosuid,size=32m', '--log-driver', 'none',
-                    '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work/.packages',
+                    '--env', 'HOME=/tmp', '--env', 'PYTHONPATH=/work:/work/.packages',
                     '--env', 'PYTHONDONTWRITEBYTECODE=1', '--workdir', '/work', image,
                     'python' if python else 'node', '-c' if python else '-e',
                     'import time; time.sleep(86400)' if python else 'setInterval(()=>{},86400000)'], directory, timeout)
@@ -486,7 +493,7 @@ process.exit(r.status === null ? 1 : r.status);
                 install_out = ''
                 if specs:
                     install = ['python', '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--target', '/work/.packages', *specs] if python else ['npm', 'install', '--no-audit', '--no-fund', '--', *specs]
-                    install_out, rc, expired = command(['docker', 'exec', name, *install], directory, timeout - (time.monotonic() - started))
+                    install_out, rc, expired = command(['docker', 'exec', '--env', 'TMPDIR=/work', name, *install], directory, timeout - (time.monotonic() - started))
                 if rc or expired or 'SENTINEL_OUTPUT_LIMIT:' in install_out:
                     out = 'SENTINEL_INSTALL_FAILED\n' + install_out
                 else:
@@ -495,7 +502,8 @@ process.exit(r.status === null ? 1 : r.status);
                         if rc or expired:
                             raise InfrastructureError(f'Docker network isolation failed: {out or "timed out"}')
                     payload = json.dumps([packages, [], python, filename])
-                    out, rc, expired = command(['docker', 'exec', name, 'python' if python else 'node',
+                    guarded = ['--env', 'SENTINEL_NETWORK_DISABLED=1', '--env', 'NODE_OPTIONS=--require=/work/network_guard.cjs'] if not allow_network else []
+                    out, rc, expired = command(['docker', 'exec', *guarded, name, 'python' if python else 'node',
                                                'worker.py' if python else 'worker.cjs', payload], directory, timeout - (time.monotonic() - started))
             else:
                 env = {'PATH': os.environ.get('PATH', ''), 'HOME': directory, 'LANG': 'C.UTF-8'}

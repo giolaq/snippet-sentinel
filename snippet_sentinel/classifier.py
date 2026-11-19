@@ -1,5 +1,7 @@
 import re
 
+from .network_guard import MARKER
+
 BROKEN = {'syntax_error', 'missing_dependency', 'runtime_error', 'timeout', 'output_limit', 'disk_limit'}
 # Statuses that say nothing about whether the docs are right; excluded from broken percentages.
 INCONCLUSIVE = {'skipped', 'needs_credentials', 'needs_context', 'needs_network'}
@@ -77,19 +79,26 @@ def context_reason(output, code):
 def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', network_disabled=False):
     if 'SENTINEL_OUTPUT_LIMIT:' in stderr:
         return 'output_limit'
+    blocked = network_disabled and MARKER in stderr
     if timed_out:
-        return 'timeout'
+        return 'needs_network' if blocked else 'timeout'
     if exit_code != 0 and re.search(r'No space left on device|ENOSPC|Read-only file system|EROFS', stderr, re.I):
         return 'disk_limit'
     if install_failed:
         return 'missing_dependency'
+    error = final_error(stderr)
+    summary = error[0] if error else stderr.strip() if '\n' not in stderr.strip() else ''
+    programming_error = re.search(r'\b(?:AttributeError|NameError|ReferenceError|SyntaxError|IndentationError|ModuleNotFoundError)\b', summary)
+    programming_error = programming_error or ('TypeError' in summary and not re.search(r'fetch failed|network request failed', summary, re.I))
+    if blocked and not programming_error:
+        return 'needs_network'
     if exit_code == 0:
         # Samples often catch and print API errors; a caught 401 did not exercise the documented call.
         return 'needs_credentials' if CAUGHT_AUTH_FAILURE.search(stderr) else 'pass'
     summary = error_summary(stderr)
     if re.search(r'does not provide an export named', summary):
         return 'runtime_error'
-    if network_disabled and re.search(r'Network is unreachable|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|Temporary failure in name resolution|Name or service not known', summary, re.I):
+    if network_disabled and not programming_error and re.search(r'Network is unreachable|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|Temporary failure in name resolution|Name or service not known', summary, re.I):
         return 'needs_network'
     if (re.search(r'^(?:SyntaxError|IndentationError|TabError)\b|Unexpected token|Transform failed', summary, re.I)
             and not re.search(r'in JSON\b|is not valid JSON|Invalid JSON', summary)):
@@ -101,7 +110,7 @@ def classify(stderr, exit_code, timed_out=False, install_failed=False, code='', 
         return 'missing_dependency'
     if re.search(r'\b(?:HTTP(?: status)?|status(?: code)?|client error)\s*:?\s*[\'\"]?40[13]\b|\b40[13]\s+(?:Unauthorized|Forbidden)\b'
                  r'|\b(?:Missing|No|Invalid|Expired) (?:\w+ )?(?:credentials?|API[ _-]?key|access token)\b'
-                 r'|\b(?:AuthenticationError|UnauthorizedError|LocalTokenNotFoundError)\b|failed to read (?:the token file|[\w ]*\btoken from)\b'
+                 r'|\b(?:AuthenticationError|UnauthorizedError|LocalTokenNotFoundError|NoCredentialsError)\b|api_key.*must be set|Unable to locate credentials|Could not resolve authentication|Neither apiKey nor config.authenticator|failed to read (?:the token file|[\\w ]*\\btoken from)\b'
                  r'|\bCould not find credentials\b|\bcredentials? requires\b|\bauthentication failed\b'
                  r'|\b40[13] Client Error\b|\b[Tt]oken is required\b|\bmust provide an api_key\b|Could not resolve authentication method'
                  r'|User authentication is required'
