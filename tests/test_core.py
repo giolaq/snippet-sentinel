@@ -191,6 +191,7 @@ def test_classifier(message, code, expected):
     ('SubjectTokenProviderError: Failed to read Kubernetes service account token from /var/run/secrets/token: ENOENT', 1, '', 'needs_credentials'),
     ("TypeError: Cannot read properties of undefined (reading 'href')", 1, 'new Agent(process.env.PROXY_URL);', 'needs_credentials'),
     ("TypeError: Cannot read properties of undefined (reading 'href')", 1, 'new Agent(config.url);', 'runtime_error'),
+    ("TypeError: Cannot read properties of undefined (reading 'id')", 1, "const u = process.env.API_URL ?? 'http://x';\nresult.data.id;", 'runtime_error'),
     ('OpenAIError: Could not find credentials for Bedrock. Pass AWS credentials', 1, '', 'needs_credentials'),
     ('Error: X.509 credential requires a nonempty own `certificateChain` value.', 1, '', 'needs_credentials'),
     ('OpenAIError: Vertex authentication failed. Check ADC and google-auth-library', 1, '', 'needs_credentials'),
