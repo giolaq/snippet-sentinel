@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from snippet_sentinel.classifier import classify
 from snippet_sentinel.dependencies import script_name, dependencies, is_esm, pinned
 from snippet_sentinel.extractor import extract, javascript_fragment
+from snippet_sentinel.runner import javascript_placeholder
 from snippet_sentinel.extractor import Snippet
 from snippet_sentinel.runner import InfrastructureError, documented_failure, run
 from snippet_sentinel.scan import github_url, scan
@@ -185,6 +186,12 @@ def test_classifier(message, code, expected):
     ("StripeAPIError: Invalid JSON received from the Stripe API\n  SyntaxError: Unexpected token '<', \"<!doctype \"... is not valid JSON", 1, '', 'runtime_error'),
     ("Error: Missing Azure OpenAI configuration", 1, "const e = process.env['AZURE_OPENAI_ENDPOINT'];\nif (!e) throw new Error('Missing Azure OpenAI configuration');", 'needs_credentials'),
     ("Error: Missing Azure OpenAI configuration", 1, "throw new Error('Missing Azure OpenAI configuration');", 'runtime_error'),
+    ('TypeError: Failed to parse URL from /api/responses', 1, "await fetch('/api/responses');", 'needs_context'),
+    ('WebRTCError: WebRTC requires a browser with RTCPeerConnection.', 1, '', 'needs_context'),
+    ('SubjectTokenProviderError: Failed to read Kubernetes service account token from /var/run/secrets/token: ENOENT', 1, '', 'needs_credentials'),
+    ("TypeError: Cannot read properties of undefined (reading 'href')", 1, 'new Agent(process.env.PROXY_URL);', 'needs_credentials'),
+    ("TypeError: Cannot read properties of undefined (reading 'href')", 1, 'new Agent(config.url);', 'runtime_error'),
+    ('InvalidArgumentError: Proxy uri is mandatory', 1, 'new ProxyAgent(process.env.PROXY_URL);', 'needs_credentials'),
     ('OpenAIError: Must provide one of the `baseURL` or `endpoint` arguments, or the `AZURE_OPENAI_ENDPOINT` environment variable', 1, '', 'needs_credentials'),
 ])
 def test_javascript_verdicts(stderr, exit_code, code, expected):
@@ -528,3 +535,15 @@ def test_docker_versions():
 ])
 def test_javascript_fragment(code, expected):
     assert javascript_fragment(code) == expected
+
+
+@pytest.mark.parametrize('code,error,expected', [
+    ("fs.readFileSync('/path/to/cert.pem');", "Error: ENOENT: no such file or directory, open '/path/to/cert.pem'", 'requires replacing the placeholder path: /path/to/cert.pem'),
+    ("fs.readFileSync('./cert.pem');", "Error: ENOENT: no such file or directory, open '/work/cert.pem'", ''),
+    ("await fetch('https://example.com/training.jsonl');", 'Error: Download failed: 404', 'requires replacing the placeholder host: example.com'),
+    ("new Stripe('sk', {host: 'example.com'});", 'StripeAPIError: Invalid JSON received from the Stripe API', 'requires replacing the placeholder host: example.com'),
+    ("await fetch('https://example.com/a');", 'TypeError: x is not a function', ''),
+    ("await fetch('https://api.real.dev/a');", 'Error: Download failed: 404', ''),
+])
+def test_javascript_placeholder(code, error, expected):
+    assert javascript_placeholder(code, error) == expected

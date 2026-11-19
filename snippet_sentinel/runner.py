@@ -54,6 +54,20 @@ def missing_placeholder_path(code, message, frames):
     return ''
 
 
+PLACEHOLDER_HOST = re.compile(r'''(?:https?://|['"])((?:[\w-]+\.)*example\.(?:com|org|net))\b''')
+
+
+def javascript_placeholder(code, error):
+    """A failure caused by a documented placeholder the reader is meant to replace."""
+    path = re.search(r"ENOENT: no such file or directory, \w+ '(/path/to/[^']+)'", error)
+    if path and path.group(1) in code:
+        return f'requires replacing the placeholder path: {path.group(1)}'
+    host = PLACEHOLDER_HOST.search(code)
+    if host and re.search(r'ENOTFOUND|ECONNREFUSED|fetch failed|\b40[04]\b|Invalid JSON', error):
+        return f'requires replacing the placeholder host: {host.group(1)}'
+    return ''
+
+
 def documented_failure(snippet, status, output):
     if status not in {'syntax_error', 'runtime_error', 'missing_dependency', 'needs_credentials', 'needs_context'}:
         return ''
@@ -63,6 +77,8 @@ def documented_failure(snippet, status, output):
     name, message = error['name'], error['message'] or ''
     if name == snippet.expected_error:
         return f'demonstrates {name} as documented'
+    if snippet.lang != 'python':
+        return javascript_placeholder(snippet.code, error[0])
     frames = re.findall(r'^  File "([^"\n]+)", line (\d+), in ', output[:error.start()], re.M)
     if name == 'NameError':
         missing = re.fullmatch(
@@ -169,23 +185,31 @@ if (installs.length) {
 const p = spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'});
 const deps = JSON.parse(p.stdout || '{}').dependencies || {};
 console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries(packages.filter(x=>deps[x]).map(x=>[x,deps[x].version]))));
-const exec = (file, options) => spawnSync(transpile ? 'node_modules/.bin/tsx' : 'node', [file], options);
-let r;
-if (esm) {
- r = exec(filename, {stdio: 'inherit'});
-} else {
- r = exec(filename, {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
- if (r.status !== 0 && /SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)|Top-level await is currently not supported with the "cjs" output format/.test(r.stderr || '')) {
-  const lines = fs.readFileSync(filename, 'utf8').split('\\n');
-  const hoisted = lines.filter(line => /^\\s*import\\b(?!\\s*[(.])/.test(line));
-  const body = lines.filter(line => !/^\\s*import\\b(?!\\s*[(.])/.test(line));
-  const wrapped = 'snippet-async' + filename.slice(filename.lastIndexOf('.'));
-  fs.writeFileSync(wrapped, hoisted.join('\\n') + '\\n(async () => {\\n' + body.join('\\n') + '\\n})().catch(error => { console.error(error); process.exitCode = 1; });\\n');
-  r = exec(wrapped, {stdio: 'inherit'});
- } else if (r.stderr) {
-  process.stderr.write(r.stderr);
- }
+const exec = (file) => spawnSync(transpile ? 'node_modules/.bin/tsx' : 'node', [file], {stdio: ['inherit', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
+const attempt = () => {
+ const r = exec(filename);
+ if (esm || r.status === 0 || !/SyntaxError: (?:await is only valid in async functions and the top level bodies of modules|Unexpected reserved word)|Top-level await is currently not supported with the "cjs" output format/.test(r.stderr || '')) return r;
+ const lines = fs.readFileSync(filename, 'utf8').split('\\n');
+ const hoisted = lines.filter(line => /^\\s*import\\b(?!\\s*[(.])/.test(line));
+ const body = lines.filter(line => !/^\\s*import\\b(?!\\s*[(.])/.test(line));
+ const wrapped = 'snippet-async' + filename.slice(filename.lastIndexOf('.'));
+ fs.writeFileSync(wrapped, hoisted.join('\\n') + '\\n(async () => {\\n' + body.join('\\n') + '\\n})().catch(error => { console.error(error); process.exitCode = 1; });\\n');
+ return exec(wrapped);
+};
+let r = attempt();
+// SDKs import optional peer dependencies (ws, undici, ...) that their docs install separately.
+const peer = /Cannot find (?:package|module) '((?:@[\\w.-]+\\/)?[\\w.-]+)[^']*'(?: imported from |\\nRequire stack:\\n- )\\S*\\/node_modules\\//;
+const peers = [];
+for (let m; r.status !== 0 && peers.length < 3 && (m = peer.exec(r.stderr || '')) && !peers.includes(m[1]);) {
+ peers.push(m[1]);
+ if (spawnSync('npm', ['install','--no-audit','--no-fund','--',m[1]], {encoding:'utf8'}).status !== 0) break;
+ r = attempt();
 }
+if (peers.length) {
+ const all = JSON.parse(spawnSync('npm',['ls','--json','--depth=0'],{encoding:'utf8'}).stdout || '{}').dependencies || {};
+ console.log('SENTINEL_VERSIONS='+JSON.stringify(Object.fromEntries([...packages, ...peers].filter(x=>all[x]).map(x=>[x,all[x].version]))));
+}
+if (r.stderr) process.stderr.write(r.stderr);
 if (r.error) console.error(r.error);
 process.exit(r.status === null ? 1 : r.status);
 '''
