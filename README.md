@@ -35,6 +35,8 @@ Only public HTTPS GitHub repository-root URLs are supported; use `https://github
 
 Docker dependency installation has network access. Before executing the snippet, the container is disconnected from the network, including access to host services. For trusted documentation that needs network, opt in with `snippet-sentinel scan ./docs --allow-network`. Dashboard scans always use the isolated default. This flag does not sandbox the local runner.
 
+For an otherwise `needs_network` result, the host checks DNS for up to ten blocked hostnames, with a shared two-second timeout. A definitive no-address result becomes `runtime_error` with a dead-URL diagnostic. Literal IPs, DNS timeouts and unavailable resolvers remain `needs_network`. These checks resolve names only; they never connect to the destination or enable snippet networking, and are skipped with `--allow-network`.
+
 When Docker is unavailable, explicitly select `--runner local`. **This executes untrusted code directly on your machine, UNSANDBOXED.** Python gets a temporary venv; JavaScript needs host Node and npm. Environment variables are not forwarded. Use only trusted samples. Missing Docker does not silently downgrade isolation.
 
 ## Extraction and results

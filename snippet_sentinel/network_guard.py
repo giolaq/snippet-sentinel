@@ -1,10 +1,15 @@
 import errno
 import ipaddress
+import json
 import os
 import socket
+import threading
 
 
 MARKER = 'SENTINEL_NETWORK_BLOCKED'
+_hosts = set()
+_marked = False
+_lock = threading.Lock()
 
 
 def local(host):
@@ -16,8 +21,17 @@ def local(host):
         return False
 
 
-def blocked():
-    os.write(2, (MARKER + '\n').encode())
+def blocked(host):
+    global _marked
+    if isinstance(host, bytes):
+        host = host.decode('ascii', errors='replace')
+    with _lock:
+        if isinstance(host, str) and len(host) <= 253 and host not in _hosts and len(_hosts) < 10:
+            _hosts.add(host)
+            os.write(2, (MARKER + ' ' + json.dumps(host) + '\n').encode())
+        elif not _marked:
+            os.write(2, (MARKER + '\n').encode())
+        _marked = True
 
 
 def install():
@@ -27,7 +41,7 @@ def install():
 
     def guarded_lookup(host, *args, **kwargs):
         if not local(host):
-            blocked()
+            blocked(host)
             raise socket.gaierror(socket.EAI_AGAIN, 'Network disabled by Snippet Sentinel')
         return lookup(host, *args, **kwargs)
 
@@ -36,13 +50,13 @@ def install():
 
     def guarded_connect(sock, address):
         if external(sock, address):
-            blocked()
+            blocked(address[0])
             raise OSError(errno.ENETUNREACH, 'Network disabled by Snippet Sentinel')
         return connect(sock, address)
 
     def guarded_connect_ex(sock, address):
         if external(sock, address):
-            blocked()
+            blocked(address[0])
             return errno.ENETUNREACH
         return connect_ex(sock, address)
 

@@ -19,6 +19,7 @@ from pathlib import Path
 from .classifier import BROKEN, classify, error_summary, final_error, context_reason
 from .dependencies import TSX, dependencies, javascript_mode, pinned, python_package, script_name
 from .network_guard import MARKER
+from .network_diagnostics import blocked_hosts, dead_host
 
 QUOTED_PATH = r"""(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
 ERROR_PATHS = re.compile(rf'({QUOTED_PATH})(?: -> ({QUOTED_PATH}))?')
@@ -411,12 +412,16 @@ def command(args, cwd, timeout, env=None, stdin=None):
                     pass
             process.wait()
             process.stdout.close()
+    decoded = output.decode(errors='replace')
     tail = output[-16000:].decode(errors='replace')
-    error = final_error(output.decode(errors='replace'))
+    error = final_error(decoded)
     if error and error[0] not in tail:
         tail = error[0][:512] + '\n' + tail
     if MARKER.encode() in output and MARKER not in tail:
         tail = MARKER + '\n' + tail
+    hosts = blocked_hosts(decoded)
+    if hosts:
+        tail = ''.join(MARKER + ' ' + json.dumps(host) + '\n' for host in hosts) + tail
     if exceeded:
         tail += '\nSENTINEL_OUTPUT_LIMIT: output limit exceeded (2 MiB)'
     return tail, process.returncode, timed_out
@@ -580,6 +585,11 @@ process.exit(r.status === null ? 1 : r.status);
             output = '\n'.join(lines)
             status = classify(output, rc, expired, install_failed, code,
                               network_disabled=runner == 'docker' and not allow_network)
+            if status == 'needs_network' and runner == 'docker' and not allow_network:
+                host = dead_host(output)
+                if host:
+                    status = 'runtime_error'
+                    output += f'\nhost {host} does not resolve (dead URL in docs)'
             if install_failed:
                 reason = illustrative_dependency(snippet, output) if status == 'missing_dependency' else ''
             else:
